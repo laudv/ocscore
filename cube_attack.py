@@ -115,6 +115,7 @@ def get_adversarial_examples(d, indices, eps, at, N, ntrials=1000, seed=1):
     advs = []
     i = 0
     dur = 0.0
+    fail_count = 0
 
     while len(advs) < N and i < len(indices):
         js = range(i, min(len(indices), i+chunk_size))
@@ -149,8 +150,10 @@ def get_adversarial_examples(d, indices, eps, at, N, ntrials=1000, seed=1):
                 })
             else:
                 base_score = at.eval(example)[0]
+                fail_count += 1
                 print("CUBE no adversarial example found", indices[i], base_label,
-                      f"({base_score:.3f} -> {adv_score:.3f})")
+                      f"({base_score:.3f} -> {adv_score:.3f}, "\
+                      f"nsuccess={len(advs)}, nfails={fail_count}/{len(indices)})")
 
             i += 1
 

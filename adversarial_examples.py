@@ -59,7 +59,7 @@ def get_adversarial_examples(fname, d, at, indices, N, cache=True):
         cub_advs = load(cub_fname)
     else:
         cub_advs = cube_attack.get_adversarial_examples(
-                d, indices, reference_linf*2.0, at, N)
+                d, indices, reference_linf*5.0, at, N)
         if cache: dump(cub_fname, cub_advs)
 
     return lt_advs, kan_advs, ver_advs, cub_advs

@@ -30,7 +30,7 @@ def parse_dataset(value):
     if value in THE_DATASETS:
         return parse_dataset(THE_DATASETS[value])
     else:
-        print(f"No parameters for {value}, parsing...")
+        #print(f"No parameters for {value}, parsing...")
         i0 = value.rindex("_")
         i2 = value.rindex("-")
         i1 = value.rindex("-", 0, i2-1)

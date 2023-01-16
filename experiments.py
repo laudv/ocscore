@@ -11,15 +11,15 @@ from pprint import pprint
 
 @click.command()
 @click.argument("dataset", type=click.UNPROCESSED, callback=get_dataset)
-@click.option("--seed", default=10)
 @click.option("-m", "--model_type", type=click.Choice(["xgb", "rf", "groot"]), default="xgb")
 @click.option("-N", "N", default=100)
 @click.option("--ratio", default=5)
 @click.option("--fold", default=0)
-@click.option("--nfolds", default=5)
+@click.option("--nfolds", default=NFOLDS)
 @click.option("--cache_dir", default="cache", show_default=True)
 @click.option("--debug", default=None)
-def run_experiments(dataset, seed, model_type, N, ratio, fold, nfolds, cache_dir, debug):
+@click.option("--seed", default=SEED)
+def run_experiments(dataset, model_type, N, ratio, fold, nfolds, cache_dir, debug, seed):
     d, num_trees, tree_depth, lr = dataset
     d.seed = seed
     d.nfolds = nfolds
@@ -88,6 +88,7 @@ def run_experiments(dataset, seed, model_type, N, ratio, fold, nfolds, cache_dir
     report["Nsample"] = len(sample_indices)
     report["Ntotal"] = N + len(sample_indices)
     report["ratio"] = ratio
+    report["sample_indices"] = sample_indices
 
     iforest, iforest_meta = d.get_iforest(fold)
     lof = None

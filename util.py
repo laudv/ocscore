@@ -8,6 +8,9 @@ import veritas
 
 from sklearn.metrics import roc_curve, auc
 
+SEED = 10
+NFOLDS = 5
+
 INPUT_DELTA = {
     "Phoneme":   0.05,
     "Spambase":  0.05,
