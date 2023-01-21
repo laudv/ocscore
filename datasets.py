@@ -1,15 +1,16 @@
 import data_and_trees
 
 THE_DATASETS = {
-    "phoneme": "Phoneme_20-6-50",
-    "spambase": "Spambase_20-5-50",
+    #"phoneme": "Phoneme_20-6-50",
+    #"spambase": "Spambase_20-5-50",
+    "calhouse": "CalhouseClf_100-5-50",
+    "electricity": "Electricity_80-8-40",
     "covtype": "CovtypeNormalized_80-6-50",
     "higgs": "Higgs_100-8-10",
     "ijcnn1": "Ijcnn1_50-5-90",
     "mnist2v4": "MnistBinClass[2,4]_50-5-70",
     "fmnist2v4": "FashionMnistBinClass[2,4]_50-5-90",
     "webspam": "Webspam_50-5-90",
-    "calhouse": "CalhouseClf_100-5-50",
 }
 
 def parse_dataset0(value):

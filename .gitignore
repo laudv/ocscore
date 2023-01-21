@@ -1,7 +1,10 @@
 cache/
+cache_pinacs/
 build/
+figures/
 __pycache__/
 models/
 env.sh
 *.so
 ocscore.c
+sync.sh

@@ -4,6 +4,7 @@ NEED_HELP=1
 M="xgb"
 N=100
 CACHE_DIR="cache"
+RATIO=5
 SCRIPT=experiments.py
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -17,8 +18,15 @@ while [[ $# -gt 0 ]]; do
             shift
             shift
             ;;
+        -r)
+            RATIO="$2"
+            shift
+            shift
+            ;;
         --pinacs)
             CACHE_DIR="cache_pinacs"
+            N=500
+            RATIO=4
             shift
             ;;
         *)
@@ -26,7 +34,7 @@ while [[ $# -gt 0 ]]; do
             for fold in 0 1 2 3 4; do
                 echo
                 echo "$(date), fold $fold ========================"
-                python $SCRIPT $1 --cache_dir $CACHE_DIR --fold $fold -N $N --model_type $M
+                python $SCRIPT $1 --cache_dir $CACHE_DIR --fold $fold -N $N --ratio $RATIO --model_type $M
                 if [[ ! $? -eq 0 ]]; then 
                     echo "ERROR, quiting... $?"
                     echo " - dataset $1"

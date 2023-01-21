@@ -13,7 +13,8 @@ def get_adversarial_fnames(fname):
     return [get_adversarial_fname(fname, x) for x in ["advs_lt", "advs_kan",
                                                       "advs_ver", "advs_cub"]]
 
-def get_adversarial_examples(fname, d, at, indices, N, cache=True):
+def get_adversarial_examples(fname, d, at, indices, N, cache=True,
+                             cube_multiplier=5.0, cube_ntrials=1000):
     nfolds = d.nfolds
 
     gen = np.random.default_rng(d.seed)
@@ -59,7 +60,9 @@ def get_adversarial_examples(fname, d, at, indices, N, cache=True):
         cub_advs = load(cub_fname)
     else:
         cub_advs = cube_attack.get_adversarial_examples(
-                d, indices, reference_linf*5.0, at, N)
+                d, indices, reference_linf*cube_multiplier, at, N,
+                ntrials=cube_ntrials,
+                seed=d.seed)
         if cache: dump(cub_fname, cub_advs)
 
     return lt_advs, kan_advs, ver_advs, cub_advs

@@ -7,6 +7,7 @@ import ocscore
 import veritas
 
 from sklearn.metrics import roc_curve, auc
+from sklearn.neighbors import LocalOutlierFactor
 
 SEED = 10
 NFOLDS = 5
@@ -14,25 +15,27 @@ NFOLDS = 5
 INPUT_DELTA = {
     "Phoneme":   0.05,
     "Spambase":  0.05,
+    "CalhouseClf": 0.04,
+    "Electricity": 0.04,
     "CovtypeNormalized":   0.08,
     "Higgs":     0.04,
     "Ijcnn1":    0.04,
     "MnistBinClass2v4":  0.4,# * 255,
     "FashionMnistBinClass2v4": 0.4,# * 255,
     "Webspam":   0.04,
-    "CalhouseClf": 0.04,
 }
 
 MAX_TIME = {
     "Phoneme":   5,
     "Spambase":  5,
+    "CalhouseClf": 10,
+    "Electricity": 10,
     "CovtypeNormalized":   20,
     "Higgs":     30,
     "Ijcnn1":    10,
     "MnistBinClass2v4":  10,
     "FashionMnistBinClass2v4": 10,
     "Webspam":   10,
-    "CalhouseClf": 10,
 }
 
 def dump(fname, data):
@@ -63,7 +66,7 @@ def get_model(dataset, model_type, fold, lr, num_trees, tree_depth, groot_epsilo
     if model_type == "xgb":
         model, meta = dataset.get_xgb_model(fold, lr, num_trees, tree_depth)
     elif model_type == "rf":
-        model, meta = dataset.get_rf_model(fold, num_trees, tree_depth)
+        model, meta = dataset.get_rf_model(fold, num_trees, tree_depth=None)
     elif model_type == "groot":
         if groot_epsilon is None:
             raise RuntimeError("pass epsilon for groot")
@@ -190,6 +193,32 @@ def collect_stats(ydetect, ycorrect, S):
              "tnr": tnr,
              }
 
+# From data_and_trees, but with limited training data, otherwise it takes too long
+def get_lof(d, fold, max_ntrain):
+    model_name = d.get_model_name(fold, "lof", 0, 0)
+    model_path = os.path.join(d.model_dir, model_name)
+    if os.path.isfile(model_path):
+        print(f"loading LocalOutlierFactor from file: {model_name}")
+        lof, meta = joblib.load(model_path)
+    else:
+        d.load_dataset()
+        Xtrain, ytrain, Xtest, ytest = d.train_and_test_set(fold)
+        if Xtrain.shape[0] > max_ntrain:
+            print("get_lof: limiting training set size from",
+                  Xtrain.shape[0], "to", max_ntrain)
+            # already randomized in train_and_test_set
+            Xtrain = Xtrain.iloc[0:max_ntrain,:]
+            ytrain = ytrain[0:max_ntrain]
+
+        t = time.time()
+        lof = LocalOutlierFactor(n_neighbors=10)
+        lof.fit(Xtrain)
+        t = time.time() - t
+        print(f"trained LocalOutlierFactor in {t:.2f}s");
+        meta = {"training_time": t}
+        joblib.dump((lof, meta), model_path)
+    return lof, meta
+
 def configure_matplotlib():
     plt.rcParams.update({
         "text.usetex": False,
@@ -213,7 +242,9 @@ def configure_matplotlib():
         "ytick.major.width": 0.5,
         "xtick.minor.width": 0.5,
         "ytick.minor.width": 0.5,
-        "lines.linewidth":   0.6,
+        "lines.linewidth":   0.8,
+
+        "hatch.linewidth": 0.5,
 
         #"text.latex.unicode" : False,
     })

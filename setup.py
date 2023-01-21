@@ -2,6 +2,9 @@ from setuptools import setup
 from distutils.extension import Extension
 from Cython.Distutils import build_ext
 
+
+# `python setup.py build_ext --inplace`
+
 setup(
     name="ocscore_lib",
     ext_modules=[

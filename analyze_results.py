@@ -1,5 +1,10 @@
+import os
+import shutil
+import subprocess
 import click
 import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
+import matplotlib.cm as cm
 import pandas as pd
 import numpy as np
 
@@ -8,6 +13,7 @@ from datasets import THE_DATASETS, parse_dataset
 
 from pprint import pprint
 from sklearn.metrics import roc_auc_score, auc
+from sklearn.neighbors import KernelDensity
 
 DETECT_ALGS = ["ocscore", "ambig", "iforest", "mlloo"]
 ADV_SETS = ["lt", "kan", "ver", "cub"]
@@ -15,6 +21,28 @@ ADV_SETS = ["lt", "kan", "ver", "cub"]
 CONF_BUCKETS = np.linspace(0.0, 1.0, 4)
 CONF_BUCKETS[-1] = 1.0001 # make last conf_hi inclusive
 CONF_BUCKETS = list(zip(CONF_BUCKETS, CONF_BUCKETS[1:]))
+
+TABLE_DIR = os.environ["LATEX_TABLE_PATH"]
+FIG_DIR = os.environ["LATEX_FIGURE_PATH"]
+
+ALG_LS = {
+    "ocscore": "-",
+    "ambig": "--",
+    "iforest": ":",
+    "mlloo": "-.",
+}
+SET_HATCH = {
+    "test": "",
+    "lt": "|||",
+    "kan": "///",
+    "ver": "---",
+    "cub": "\\\\\\",
+}
+
+SAVEFIGS=True
+
+
+configure_matplotlib()
 
 def collect_aucs_for_dataset(dataset, model_type, N, ratio, nfolds, cache_dir, seed):
     d, num_trees, tree_depth, lr = dataset
@@ -52,10 +80,8 @@ def collect_aucs(model_type, N, ratio, nfolds, cache_dir, seed):
     aucs = {}
     for dname in THE_DATASETS:
         dataset = parse_dataset(dname)
-        aucs[dname] = collect_aucs_for_dataset(dataset,
-                                                            model_type, N,
-                                                            ratio, nfolds,
-                                                            cache_dir, seed)
+        aucs[dname] = collect_aucs_for_dataset(dataset, model_type, N, ratio,
+                                               nfolds, cache_dir, seed)
     return aucs
 
 
@@ -351,6 +377,13 @@ def collect_results_dataset(dataset, model_type, N, ratio, nfolds, cache_dir, se
         conf_sample.append(np.abs(pred_prob_sample - 0.5) + 0.5)
         Xadv, Xbase = {}, {}
 
+        per_alg["ocscore"]["setup_time"] = report["refset_time"]
+        per_alg["iforest"]["setup_time"] = report["iforest_time"]
+        per_alg["ambig"]["setup_time"] = 0.0
+        per_alg["mlloo"]["setup_time"] = 0.0
+        if "lof_time" in report:
+            per_alg["lof"]["setup_time"] = report["lof_time"]
+
         # per adv set
         for adv_set in ADV_SETS:
             advs_fname = report[f"{adv_set}_fname"]
@@ -374,6 +407,7 @@ def collect_results_dataset(dataset, model_type, N, ratio, nfolds, cache_dir, se
         for adv_set in ADV_SETS:
             for detect_alg in DETECT_ALGS:
                 per_set_alg[adv_set][detect_alg]["auc"] = report[adv_set][detect_alg]["auc"]
+                per_set_alg[adv_set][detect_alg]["time"] = report[adv_set][detect_alg]["time"]
                 Sfull = report[adv_set][detect_alg]["S"]
                 Sadv = Sfull[Nsample:]
                 per_set_alg[adv_set][detect_alg]["S"] = Sadv
@@ -433,7 +467,7 @@ def collect_results_dataset(dataset, model_type, N, ratio, nfolds, cache_dir, se
     for adv_set in ADV_SETS:
         for detect_alg in DETECT_ALGS:
             for k in ["auc", "acc", "threshold_per_set", "acc_per_set",
-                      "acc_sample_per_set"]:
+                      "acc_sample_per_set", "time"]:
                 per_set_alg[adv_set][detect_alg][f"{k}_mean"] =\
                         np.mean([x[adv_set][detect_alg][k] for x in per_set_alg_all])
                 per_set_alg[adv_set][detect_alg][f"{k}_std"] =\
@@ -483,10 +517,12 @@ def collect_results_dataset(dataset, model_type, N, ratio, nfolds, cache_dir, se
 
     return per_set, per_alg, per_set_alg, per_confdelta
 
-def collect_results(model_type, N, ratio, nfolds, cache_dir, seed):
+def collect_results(dnames, model_type, N, ratio, nfolds, cache_dir, seed):
     per_set, per_alg, per_set_alg, per_confdelta = {}, {}, {}, {}
-    for dname in ["phoneme", "covtype", "mnist2v4", "ijcnn1", "spambase", "webspam"]:
-    #for dname in ["covtype", "mnist2v4"]:
+    for dname in dnames:
+    #for dname in ["phoneme", "covtype", "mnist2v4", "ijcnn1", "webspam", "calhouse"]:
+    #for dname in ["mnist2v4", "covtype", "ijcnn1", "webspam"]:
+    #for dname in ["phoneme", "mnist2v4"]:
         dataset = parse_dataset(dname)
         ps, pa, psa, pcd = collect_results_dataset(dataset, model_type, N,
                                                    ratio, nfolds, cache_dir,
@@ -503,46 +539,131 @@ def display_results(per_set, per_alg, per_set_alg):
     dnames = list(per_set.keys())
     df_auc_per_alg = pd.DataFrame("-", index=THE_DATASETS, columns=DETECT_ALGS)
     df_acc_per_alg = pd.DataFrame("-", index=THE_DATASETS, columns=DETECT_ALGS)
+    df_auc_per_set = pd.DataFrame("-", index=DETECT_ALGS, columns=ADV_SETS)
+
+    set_kinds = ["low confidence", "high confidence"]
+    df_auc_per_kind = pd.DataFrame("-", index=DETECT_ALGS, columns=set_kinds)
 
     index = pd.MultiIndex.from_product([DETECT_ALGS, ADV_SETS], names=["Algorithm", "Set"])
     df_auc = pd.DataFrame("-", index=index, columns=THE_DATASETS)
+    df_time = pd.DataFrame("-", index=THE_DATASETS, columns=DETECT_ALGS)
 
     for dname in dnames:
         ps = per_set[dname]
         pa = per_alg[dname]
         psa = per_set_alg[dname]
 
+        aucmax = max(pa[da]["auc_aggr_mean"] for da in DETECT_ALGS)
+        aucmax_ps = {s:max(psa[s][da]["auc_mean"] for da in DETECT_ALGS) for s in ADV_SETS}
+
         for detect_alg in pa.keys():
-            df_auc_per_alg.loc[dname, detect_alg] = pa[detect_alg]["auc_aggr_mean"]
+            v = pa[detect_alg]["auc_aggr_mean"]
+            e = pa[detect_alg]["auc_aggr_std"]
+            best = "\\bf" if np.abs(v-aucmax)<0.01 else ""
+            df_auc_per_alg.loc[dname, detect_alg] = f"{best}{v:1.2f}{{\\tiny±{e:1.2f}}}"
             df_acc_per_alg.loc[dname, detect_alg] = pa[detect_alg]["acc_aggr_mean"]
 
+            v = np.sum([psa[a][detect_alg]["time_mean"] for a in psa.keys()]) / (5*2500) * 1000
+            e = np.sum([psa[a][detect_alg]["time_std"] for a in psa.keys()]) / (5*2500) * 1000
+            #df_time.loc[dname, detect_alg] = f"{v:1.2f}{{\\tiny±{e:1.2f}}}"
+            df_time.loc[dname, detect_alg] = f"{v:1.3f}"
+
             for adv_set in ADV_SETS:
-                df_auc.loc[(detect_alg, adv_set), dname] = psa[adv_set][detect_alg]["auc_mean"]
+                v = psa[adv_set][detect_alg]["auc_mean"]
+                e = psa[adv_set][detect_alg]["auc_std"]
+                best = "\\bf" if np.abs(v-aucmax_ps[adv_set])<max(0.001, e) else ""
+                df_auc.loc[(detect_alg, adv_set), dname] = f"{best}{v:1.2f}{{\\tiny±{e:1.2f}}}"
+
+        for adv_set in pa.keys():
+            pass
+
+    # Per set performance of each alg, averaged over all datasets
+    for adv_set in ADV_SETS:
+        aucs = {}
+
+        for detect_alg in DETECT_ALGS:
+            vs = [per_set_alg[d][adv_set][detect_alg]["auc_mean"] for d in dnames]
+            aucs[detect_alg] = vs
+
+        aucmax = max(np.mean(v) for v in aucs.values())
+
+        for detect_alg, vs in aucs.items():
+            v = np.mean(aucs[detect_alg])
+            e = np.std(aucs[detect_alg])
+            best = "\\bf" if np.abs(v-aucmax)<0.01 else ""
+            df_auc_per_set.loc[detect_alg, adv_set] = f"{best}{v:1.2f}{{\\tiny±{e:1.2f}}}"
+
+    # Per set 'kind' performance of each alg, averaged over all datasets
+    for kind, adv_sets in zip(set_kinds, [["lt", "kan"], ["ver", "cub"]]):
+        aucs = {}
+
+        for detect_alg in DETECT_ALGS:
+            vs = []
+            for adv_set in adv_sets:
+                vs += [per_set_alg[d][adv_set][detect_alg]["auc_mean"]
+                       for d in dnames]
+            aucs[detect_alg] = vs
+
+        aucmax = max(np.mean(v) for v in aucs.values())
+
+        for detect_alg, vs in aucs.items():
+            v = np.mean(aucs[detect_alg])
+            e = np.std(aucs[detect_alg])
+            best = "\\bf" if np.abs(v-aucmax)<0.01 else ""
+            df_auc_per_kind.loc[detect_alg, kind] = f"{best}{v:1.2f}{{\\tiny±{e:1.2f}}}"
 
     print("\nauc_aggr AUC aggregated over all sets")
     print(df_auc_per_alg)
-    #print("acc_aggr ACC aggregated over all sets")
-    #print(df_acc_per_alg)
+    with open(os.path.join(TABLE_DIR, "auc_aggr_table.tex"), "w") as f:
+        #df_auc_per_alg.columns = [f"{{{x}}}" for x in df_auc_per_alg.columns]
+        df_auc_per_alg.to_latex(buf=f, longtable=False, escape=False,
+                column_format="l"+"l"*df_auc_per_alg.shape[1])
+
+    print("\nauc_aggr AUC aggregated over all datasets")
+    print(df_auc_per_set)
+    print(df_auc_per_kind)
+    with open(os.path.join(TABLE_DIR, "auc_aggr_per_set_table.tex"), "w") as f:
+        #df_auc_per_alg.columns = [f"{{{x}}}" for x in df_auc_per_alg.columns]
+        df_auc_per_kind.to_latex(buf=f, longtable=False, escape=False,
+                column_format="l"+"c"*df_auc_per_kind.shape[1])
+
     print("\nDF AUC")
     print(df_auc)
+    with open(os.path.join(TABLE_DIR, "auc_table.tex"), "w") as f:
+        #df_auc_per_alg.columns = [f"{{{x}}}" for x in df_auc_per_alg.columns]
+        df_auc.to_latex(buf=f, longtable=False, escape=False,
+                column_format="ll"+"l"*df_auc.shape[1])
 
-def plot_confdelta(per_confdelta):
+    print("\nDF TIME")
+    print(df_time)
+    with open(os.path.join(TABLE_DIR, "time_table.tex"), "w") as f:
+        #df_auc_per_alg.columns = [f"{{{x}}}" for x in df_auc_per_alg.columns]
+        df_time.to_latex(buf=f, longtable=False, escape=False,
+                column_format="l"+"l"*df_time.shape[1])
+
+def plot_confdelta(per_confdelta, per_alg):
     dnames = per_confdelta.keys()
-    fig, axs = plt.subplots(1, len(dnames), figsize=(20, 5), sharey=True, sharex=False)
-    fig.subplots_adjust(left=0.01, right=0.99)
+    fig, axs = plt.subplots(2, len(dnames),
+                            figsize=(6.2, 2.0),
+                            sharex=True,
+                            gridspec_kw={'height_ratios':[2, 1]})
+    fig.subplots_adjust(left=0.07, bottom=0.17, right=0.98, hspace=0.2,
+                        wspace=0.3, top=0.78)
 
-    for ax, dname in zip(axs.ravel(), dnames):
+    for ax, axl, dname in zip(axs[0, :], axs[1, :], dnames):
         pcd = per_confdelta[dname]
+        pa = per_alg[dname]
         conf = pcd["conf"]
         #conf = pcd["delta"]
 
-        confq0 = np.linspace(min(conf), max(conf), 20)
-        confq1 = np.quantile(conf, np.linspace(0, 1, 101))
-        confq = np.sort(np.hstack((confq0, confq1)))
-        #confq = np.quantile(conf, np.linspace(0, 1, 101))
+        #confq0 = np.linspace(min(conf), max(conf), 20)
+        #confq1 = np.quantile(conf, np.linspace(0, 1, 101))
+        #confq = np.sort(np.hstack((confq0, confq1)))
+        confq = np.quantile(conf, np.linspace(0, 1, 201))
         confq[-1] += 0.001 # make inclusive
         intervals = list(zip(confq, confq[20:]))
         xs = []
+        xs2 = [] # average conf in window instead of mid
         ns = []
         ns_adv = []
         ws = [] # number of ex in window
@@ -551,34 +672,58 @@ def plot_confdelta(per_confdelta):
         for vlo, vhi in intervals:
             vmid = vlo + (vhi-vlo)/2.0
             xs.append(vmid)
-            mask = (conf < vmid)
+            mask = (conf < vhi)
             ns.append(mask.mean())
             ns_adv.append((mask & is_adv).sum() / n_adv)
             mask = (vlo <= conf) & (conf < vhi)
             ws.append(mask.mean())
-        ax.plot(ns, xs, label="Confidence", color="gray", ls="--")
-        #ax.plot(xs, ns, label="#ex seen", color="lightgray", ls=":")
-        #ax.plot(ns, ns_adv, label="#advs", color="lightgray", ls=":")
-        #ax.plot(xs, ws, label="#window", color="lightgray", ls=":")
+            xs2.append(conf[mask].mean())
+        ns[0] = 0
+        #axl.plot(ns, xs, label="Confidence", color="gray", ls="--")
+        axl.plot(ns, xs2, label="Confidence", color="gray", ls="-")
+        #axlt = axl.twinx()
+        #axlt.plot(ns, ns_adv, label="Fraction Adv", color="gray", ls=":")
+        #axlt.set_ylim([0.0, 1.05])
+        #axl.plot(xs, ns, label="#ex seen", color="gray", ls="-")
+        #axl.plot(ns, ns_adv, label="#advs", color="lightgray", ls=":")
+        #ax.plot(ns, ws, label="#window", color="lightgray", ls="-")
+        #print("window sizes", dname, np.round(ws, 3))
 
+        lines = []
         for detect_alg in DETECT_ALGS:
-        #for detect_alg in ["ocscore"]:
+            threshold = 1.0 - 0.5*pa[detect_alg]["threshold_mean"]
             is_adv_pred = pcd["is_adv_pred"][detect_alg]
             is_correct = is_adv == is_adv_pred
             acc_per_conf = []
             for vlo, vhi in intervals:
                 mask = (vlo <= conf) & (conf < vhi)
                 acc_per_conf.append(is_correct[mask].mean())
-            ax.plot(ns, acc_per_conf, label=detect_alg)
+            l, = ax.plot(ns, acc_per_conf, label=detect_alg, ls=ALG_LS[detect_alg])
+            lines.append(l)
 
-        #ax.set_xlabel("Confidence")
-        ax.set_xlabel("Fraction of examples")
-        ax.set_ylabel("Accuracy")
+            #if detect_alg == "ambig":
+            #    thrs_idx = np.argmin(np.maximum(0.0, threshold-xs2))
+            #    print("thrs_idx", thrs_idx, xs2[thrs_idx], threshold)
+            #    ax.plot([ns[thrs_idx]], [0.0], "^", c=l.get_color())
+
+
+        #axl.set_xlabel("Confidence")
+        axl.set_xlabel("fraction of examples")
         #xticks = np.linspace(0, 1, 5)
         #xticklabels = np.quantile(confq, xticks).round(2)
         #ax.set_xticks(xticks)
         #ax.set_xticklabels(xticklabels)
         ax.set_title(dname)
+        ax.set_xlim([0.0, 1.0])
+        axl.set_xlim([0.0, 1.0])
+        ax.set_ylim([0.0, 1.05])
+        axl.set_xticks([0.0, 0.2, 0.4, 0.6, 0.8, 1.0])
+        axl.set_xticklabels([".0", ".2", ".4", ".6", ".8", "1"])
+        ax.set_xticks(axl.get_xticks())
+        #ax.set_xticklabels([""] * len(axl.get_xticks()))
+        #ax.grid(visible=True, axis="x", which="major", color="lightgray")
+        #axl.grid(visible=True, axis="x", which="major", color="lightgray")
+        axl.set_ylim([0.5, 1.05])
 
         #fig, ax = plt.subplots()
         #ax.set_title(dname)
@@ -596,9 +741,181 @@ def plot_confdelta(per_confdelta):
         #    ax.plot(x, y, "d", label=adv_set, color=s.get_color())
         #ax.legend()
 
-    axs[0].legend()
-    #axs[0].set_xlim([0.0, 1.01])
-    axs[0].set_ylim([0.0, 1.01])
+    #axs[0, 0].legend()
+    fig.legend(handles=lines, ncol=len(lines), fancybox=False, loc="upper center")
+    axs[0, 0].set_ylabel("Accuracy")
+    #axs[1, 0].legend()
+    axs[1, 0].set_ylabel("Conf.")
+
+    if SAVEFIGS:
+        figname = "acc_per_conf"
+        fig.savefig(os.path.join("figures", f"{figname}.svg"))
+        subprocess.run(["/home/laurens/repos/dotfiles/scripts/svg2latex", f"{figname}.svg"], cwd="figures")
+        shutil.copyfile(os.path.join("figures", f"{figname}.pdf_tex"),
+                        os.path.join(FIG_DIR, f"{figname}.pdf_tex"))
+        shutil.copyfile(os.path.join("figures", f"{figname}.pdf"),
+                        os.path.join(FIG_DIR, f"{figname}.pdf"))
+    plt.show()
+
+def plot_confdist(per_confdelta, model_type): # all in one plot --> busy hard to read
+    dnames = per_confdelta.keys()
+    #fig, axs = plt.subplots(1, len(dnames), figsize=(20, 5))
+    #fig.subplots_adjust(left=0.02, right=0.98)
+    cmap = plt.get_cmap("tab10")
+
+    all_conf = np.array([])
+    all_sets = np.array([])
+
+    #for ax, dname in zip(axs.ravel(), dnames):
+    for k, dname in enumerate(dnames):
+        pcd = per_confdelta[dname]
+        conf = pcd["conf"]
+        sets = pcd["set"]
+
+        all_conf = np.hstack((all_conf, conf))
+        all_sets = np.hstack((all_sets, sets))
+
+        bins = np.linspace(0.5, 1.0, 21)
+        x = np.linspace(0.5, 1.0, 101)
+        bottom = np.zeros(x.shape)
+
+        #ax=axs.ravel()[k]
+        #for u, s in enumerate(ADV_SETS + ["test"]):
+        #    conf_s = conf[sets == s]
+        #    hist, bin_edges = np.histogram(conf_s, bins=bins)
+        #    hist = hist / len(conf)
+        #    kwargs = {"facecolor": cmap(u)}
+        #    if s == "test":
+        #        kwargs["facecolor"] = "gray"
+        #    kde = KernelDensity(kernel='gaussian', bandwidth=0.03).fit(conf_s.reshape(-1, 1))
+        #    y = np.exp(kde.score_samples(x.reshape(-1, 1))) / (len(ADV_SETS)+1)
+        #    #ax.bar(bins[:-1], hist, width=0.05, align="edge", bottom=bottom,
+        #    #       label=s, hatch=SET_HATCH[s],
+        #    #       linewidth=0.5, edgecolor="black", **kwargs)
+        #    #ax.plot(bins[:-1], hist+bottom, label=s)
+        #    ax.fill_between(x, bottom, bottom+y, label=s, edgecolor="black",
+        #                    linewidth=0.5, hatch=SET_HATCH[s], **kwargs)
+        #    #print(f"{s:3}", hist)
+        #    bottom += y
+
+        #ax.set_title(dname)
+        #ax.set_xlabel("Confidence")
+        #ax.set_ylabel("Density")
+        #ax.legend()
+
+    fig2, ax = plt.subplots(figsize=(1.8, 1.8))
+    fig2.subplots_adjust(left=0.15, bottom=0.19, right=0.98, top=0.96)
+
+    conf = all_conf
+    sets = all_sets
+    bottom = np.zeros(x.shape)
+    for u, s in enumerate(ADV_SETS + ["test"]):
+        conf_s = conf[sets == s]
+        hist, bin_edges = np.histogram(conf_s, bins=bins)
+        hist = hist / len(conf)
+        kwargs = {"facecolor": cmap(u)}
+        if s == "test":
+            kwargs["facecolor"] = "gray"
+        kde = KernelDensity(kernel='epanechnikov', bandwidth=0.02).fit(conf_s.reshape(-1, 1))
+        #y = kde.score_samples(x.reshape(-1, 1))
+        y = np.exp(kde.score_samples(x.reshape(-1, 1)))
+        #ax.bar(bins[:-1], hist, width=0.05, align="edge", bottom=bottom,
+        #       label=s, hatch=SET_HATCH[s],
+        #       linewidth=0.5, edgecolor="black", **kwargs)
+        #ax.plot(bins[:-1], hist+bottom, label=s)
+        ax.fill_between(x, bottom, bottom+y, label=s, edgecolor="black",
+                        linewidth=0.5, hatch=SET_HATCH[s], **kwargs)
+        #print(f"{s:3}", hist)
+        bottom += y
+
+    ax.set_xlabel("Confidence")
+    ax.set_ylabel("Density")
+    ax.set_xlim([0.5, 1])
+    ax.set_ylim([0.0, ax.get_ylim()[1]])
+    ax.set_yticklabels([""] * len(ax.get_yticks()))
+    ax.legend(loc="upper center")
+
+    if SAVEFIGS:
+        figname = f"conf_density_{model_type}"
+        fig2.savefig(os.path.join("figures", f"{figname}.svg"))
+        subprocess.run(["/home/laurens/repos/dotfiles/scripts/svg2latex", f"{figname}.svg"], cwd="figures")
+        shutil.copyfile(os.path.join("figures", f"{figname}.pdf_tex"),
+                        os.path.join(FIG_DIR, f"{figname}.pdf_tex"))
+        shutil.copyfile(os.path.join("figures", f"{figname}.pdf"),
+                        os.path.join(FIG_DIR, f"{figname}.pdf"))
+
+    plt.show()
+
+def plot_confdist2(per_confdelta, model_type): # 5 different subplots
+    dnames = per_confdelta.keys()
+    cmap = plt.get_cmap("tab10")
+
+    all_conf = np.array([])
+    all_sets = np.array([])
+
+    for k, dname in enumerate(dnames):
+        pcd = per_confdelta[dname]
+        conf = pcd["conf"]
+        sets = pcd["set"]
+
+        all_conf = np.hstack((all_conf, conf))
+        all_sets = np.hstack((all_sets, sets))
+
+        bins = np.linspace(0.5, 1.0, 21)
+        x = np.linspace(0.5, 1.0, 101)
+        bottom = np.zeros(x.shape)
+
+    fig, axs = plt.subplots(1, 5, figsize=(6.2, 0.9), sharey=True)
+    fig.subplots_adjust(left=0.055, bottom=0.36, right=0.99, top=0.9, wspace=0.1)
+
+    conf = all_conf
+    sets = all_sets
+    bottom = np.zeros(x.shape)
+    for u, (ax, s) in enumerate(zip(axs.ravel(), ["test"] + ADV_SETS)):
+        conf_s = conf[sets == s]
+        hist, bin_edges = np.histogram(conf_s, bins=bins)
+        hist = hist / len(conf)
+        kwargs = {"facecolor": cmap(u)}
+        label = s
+        if s == "test":
+            label = "test set"
+            kwargs["facecolor"] = "gray"
+        kde = KernelDensity(kernel="gaussian", bandwidth=0.02).fit(conf_s.reshape(-1, 1))
+        #y = kde.score_samples(x.reshape(-1, 1))
+        y = np.exp(kde.score_samples(x.reshape(-1, 1)))
+        #ax.bar(bins[:-1], hist, width=0.05, align="edge", bottom=bottom,
+        #       label=s, hatch=SET_HATCH[s],
+        #       linewidth=0.5, edgecolor="black", **kwargs)
+        #ax.plot(bins[:-1], hist+bottom, label=s)
+        ax.fill_between(x, bottom, bottom+y, label=label, edgecolor="black",
+                        linewidth=0.5, **kwargs)
+        #print(f"{s:3}", hist)
+        #bottom += y
+
+        #ax.set_title(s)
+        ax.set_xlabel("Confidence")
+        #ax.set_ylabel("Density")
+        ax.set_xlim([0.5, 1])
+        ax.set_ylim([0.0, ax.get_ylim()[1]])
+        ax.set_xticks([0.5, 0.75, 1.0])
+        ax.set_xticklabels([".5", ".75", "1"])
+        #ax.set_yticklabels([""] * len(ax.get_yticks()))
+        plt.setp(ax.get_yticklabels(), visible=False)
+        ax.legend(loc="upper center")
+
+
+    axs[0].set_ylabel("Gaussian\nkernel density")
+    #for k in [0, 1, 2]: plt.setp(axs[k].get_xticklabels(), visible=False)
+
+    if SAVEFIGS:
+        figname = f"conf_density_{model_type}"
+        fig.savefig(os.path.join("figures", f"{figname}.svg"))
+        subprocess.run(["/home/laurens/repos/dotfiles/scripts/svg2latex", f"{figname}.svg"], cwd="figures")
+        shutil.copyfile(os.path.join("figures", f"{figname}.pdf_tex"),
+                        os.path.join(FIG_DIR, f"{figname}.pdf_tex"))
+        shutil.copyfile(os.path.join("figures", f"{figname}.pdf"),
+                        os.path.join(FIG_DIR, f"{figname}.pdf"))
+
     plt.show()
 
 def plot_aucs(aucs):
@@ -697,7 +1014,61 @@ def plot_accs(all_accs):
     plt.show()
 
 
+def plot_vary_refset_size(r, model_type):
+    markers = ["o", "x", "D", "v", "^", "s", "h", "H"]
+    lstyles = list(ALG_LS.values())
+    cmap = cm.get_cmap("tab10")
+    fig, axs = plt.subplots(1, 2, figsize=(3.2, 1.5), num=f"subset")
+    fig.subplots_adjust(left=0.15, bottom=0.22, right=0.96, top=0.82, wspace=0.45, hspace=0.60)
 
+    for i, dname in enumerate(["covtype", "mnist2v4", "ijcnn1"]):
+        data = r[dname]
+        subsets = data[0]["subsets"]
+        for j, k in [(0, "aucs"), (1, "times")]:
+            if k == "times":
+                a = np.vstack([np.array(data[fold][k]) / data[fold][k][-1] for fold in range(len(data))])
+            else:
+                a = np.vstack([data[fold][k] for fold in range(len(data))])
+            y = a.mean(axis=0)
+            e = a.std(axis=0)
+            axs[j].errorbar(subsets, y, yerr=e, fmt=lstyles[i],
+                    marker=markers[i],
+                    color=cmap(i), markersize=3, label=dname)
+            axs[j].set_xlabel("subset size")
+            axs[j].set_xlim([0.0, 1.1])
+            axs[j].set_xticks(subsets)
+            xlabels = [f"{x}".lstrip("0") for x in subsets]
+            xlabels[-1] = "1"
+            axs[j].set_xticklabels(xlabels)
+
+    #axs[0].legend()
+    handles, labels = axs.ravel()[0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="upper center", ncol=4)
+    axs[0].set_ylim([0.5, 1.01])
+    axs[0].set_ylabel("ROC AUC")
+    axs[1].set_ylabel("time fraction")
+    #axs[1].set_yscale("log")
+
+    #d = .04
+    #axs[0].plot(
+    #        (0, d, -d, d, 0),
+    #        (0, d, 3*d, 5*d, 6*d),
+    #        transform=axs[0].transAxes, color="k", clip_on=False)
+
+    #kwargs.update(transform=ax2.transAxes)  # switch to the bottom axes
+    #ax2.plot((-d, +d), (1 - d, 1 + d), **kwargs)  # bottom-left diagonal
+    #ax2.plot((1 - d, 1 + d), (1 - d, 1 + d), **kwargs)  # bottom-right diagonal
+
+    if SAVEFIGS:
+        figname = f"vary_refset_size_{model_type}"
+        fig.savefig(os.path.join("figures", f"{figname}.svg"))
+        subprocess.run(["/home/laurens/repos/dotfiles/scripts/svg2latex", f"{figname}.svg"], cwd="figures")
+        shutil.copyfile(os.path.join("figures", f"{figname}.pdf_tex"),
+                        os.path.join(FIG_DIR, f"{figname}.pdf_tex"))
+        shutil.copyfile(os.path.join("figures", f"{figname}.pdf"),
+                        os.path.join(FIG_DIR, f"{figname}.pdf"))
+
+    plt.show()
 
 
 @click.command()
@@ -729,15 +1100,36 @@ def analyze(model_type, N, ratio, nfolds, cache_dir, seed):
     #all_accs = collect_accs_fixed_threshold(model_type, N, ratio, nfolds, cache_dir, seed)
     #plot_accs(all_accs)
 
-    per_set, per_alg, per_set_alg, per_confdelta = collect_results(model_type,
+
+    ###########
+
+
+    global SAVEFIGS
+    SAVEFIGS=True
+
+    #dnames = ["phoneme"]
+    dnames = ["phoneme", "covtype", "mnist2v4", "ijcnn1", "webspam", "calhouse", "fmnist2v4"]
+    #dnames = ["covtype", "mnist2v4", "ijcnn1", "calhouse"]
+    #dnames = ["mnist2v4", "fmnist2v4"]
+
+    per_set, per_alg, per_set_alg, per_confdelta = collect_results(dnames,
+                                                                   model_type,
                                                                    N, ratio,
                                                                    nfolds,
                                                                    cache_dir,
                                                                    seed)
     display_results(per_set, per_alg, per_set_alg)
-    plot_confdelta(per_confdelta)
+    #plot_confdelta(per_confdelta, per_alg)
+    #plot_confdist2(per_confdelta, model_type)
+
+
+    ###########
+
+    
+    # python analyze_results.py -N 500 --cache_dir=cache_pinacs --ratio 4
+    #plot_vary_refset_size(load(os.path.join(cache_dir, f"vary_refszet_size_{model_type}.joblib")), model_type)
+
     
 
 if __name__ == "__main__":
-    #configure_matplotlib()
     analyze()

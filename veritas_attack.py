@@ -5,12 +5,14 @@ from util import *
 
 def get_closest_adversarial_examples(d, indices, at, N, max_time=10, delta_multiplier=1.5):
     kan_advs = []
+    nfail = 0
 
     if N > len(indices):
         print(f"WARNING: reducing N from {N} to {len(indices)}")
         N = len(indices)
 
     for i in indices:
+        print(f"CLOSEST {i}, {len(kan_advs)}/{N} (nfail={nfail})")
         example = d.X.iloc[i, :].to_numpy()
         label = int(d.y[i])
         target_output = int(not bool(label))
@@ -26,18 +28,20 @@ def get_closest_adversarial_examples(d, indices, at, N, max_time=10, delta_multi
 
         at0, at1 = (at, None) if label else (None, at) # minimize if y==1, max if y==0
         rob = veritas.VeritasRobustnessSearch(at0, at1,
-                example=example, mem_capacity=8*1024*1024*1024,
+                example=example, mem_capacity=16*1024*1024*1024,
                 start_delta=INPUT_DELTA[d.name()], max_time=max_time)
         rob.search()
         if len(rob.generated_examples) > 0:
             adv_example = rob.generated_examples[-1]
         else:
             print(f"i={i}: NO ADV.EX. FOUND, y={at.eval(example)[0]:.3f}")
+            nfail += 1
             continue
         print()
 
         tstop = time.time()
-        verify_example_outcome(at, adv_example, target_output, f"KAN adv example {i} label doesn't match")
+        verify_example_outcome(at, adv_example, target_output,
+                               f"KAN adv example {i} label doesn't match")
 
         kan_advs.append({
             "index": i,
@@ -55,7 +59,7 @@ def get_closest_adversarial_examples(d, indices, at, N, max_time=10, delta_multi
 
 def get_veritas_search(at, example, delta):
     ver = veritas.Search.max_output(at)
-    ver.set_mem_capacity(8*1024*1024*1024)
+    ver.set_mem_capacity(16*1024*1024*1024)
     ver.prune([veritas.Domain(x-delta, x+delta) for x in example])
     ver.stop_when_upper_less_than = 0.0
     ver.auto_eps = False
@@ -69,6 +73,8 @@ def get_veritas_search(at, example, delta):
 
 def get_adversarial_examples(d, indices, delta, at, N):
     ver_advs = []
+    max_time = 30
+    failcount = 0
 
     if N > len(indices):
         print(f"WARNING: reducing N from {N} to {len(indices)}")
@@ -87,7 +93,13 @@ def get_adversarial_examples(d, indices, delta, at, N):
     
         adv_example = None
         while True:
-            ver.step_for(0.25, 250)
+
+            try:
+                ver.step_for(0.25, 250)
+            except RuntimeError as e:
+                print("Out of memory")
+                print(e)
+                break
             upper_bound = ver.current_bounds()[1]
 
             if ver.num_solutions() > 0 and upper_bound >= 0.0:
@@ -95,11 +107,18 @@ def get_adversarial_examples(d, indices, delta, at, N):
                 adv_example = veritas.get_closest_example(sol, example)
                 print(f"VERITAS {i} solution found in {time.time() - tstart:.2f}s")
                 break
+            elif time.time() - tstart > max_time:
+                break
             elif upper_bound < 0.0:
                 print(f"VERITAS {i} increasing delta")
                 current_delta *= 2.0
                 ver = get_veritas_search(at_ver, example, current_delta)
         tstop = time.time()
+
+        if adv_example is None:
+            failcount += 1
+            print(f"No adversarial example found... count={failcount}")
+            continue
 
         assert adv_example is not None
         ver_advs.append({

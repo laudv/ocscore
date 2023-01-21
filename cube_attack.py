@@ -87,6 +87,7 @@ def cube_attack2(rng, f, X, y, eps, ntrials, attributes, p=0.5, deltas_init=None
         sel = rng.choice(attributes, size=(X.shape[0], 1))
         dir = eps if trial//2==0 else -eps
         np.put_along_axis(diff, sel, dir, axis=1)
+        diff *= rng.random((X.shape[0], 1)) # magnitude
         np.clip(xadv+diff, xlo, xhi, out=xadv_tmp)
         fmargin = f.fmargin(xadv_tmp, y)
         #idx_improved = (fmargin < fmargin_min) & ~done
@@ -153,7 +154,7 @@ def get_adversarial_examples(d, indices, eps, at, N, ntrials=1000, seed=1):
                 fail_count += 1
                 print("CUBE no adversarial example found", indices[i], base_label,
                       f"({base_score:.3f} -> {adv_score:.3f}, "\
-                      f"nsuccess={len(advs)}, nfails={fail_count}/{len(indices)})")
+                      f"nsuccess={len(advs)}, nfails={fail_count}/{len(indices)-len(advs)})")
 
             i += 1
 

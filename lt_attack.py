@@ -36,11 +36,13 @@ def _parse_adv_example_str(base, value):
     splits = value.split(" ")
     pred_y = int(splits[0])
     adv_y = int(splits[1])
-    for x in splits[2:]:
+    score = float(splits[2])
+    adv_score = float(splits[3])
+    for x in splits[4:]:
         feat_id, value = x.split(":")
         feat_id, value = int(feat_id), float(value)
         adv_ex[feat_id] = value
-    return pred_y, adv_y, adv_ex
+    return pred_y, adv_y, score, adv_score, adv_ex
 
 def _call_lt_attack(at, X, y, debug=False):
     p = Popen([LT_ATTACK_EXEC, "-"], stdout=PIPE, stdin=PIPE, stderr=STDOUT)    
@@ -69,17 +71,25 @@ def _call_lt_attack(at, X, y, debug=False):
             key, value = line[1:].split(">")
             if key == "FAIL":
                 adv_examples.append("FAIL")
-            elif key == "ADV_EX": # <true label> <adv label> [<feat_id>:<value>]+
+            elif key == "ADV_EX": # <true label> <adv label> <base_score> <adv_score> [<feat_id>:<value>]+
                 base_example = X[i, :]
-                pred_y, adv_y, adv_example = _parse_adv_example_str(base_example, value)
-                #print("LABELS from LT-attack:", pred_y, adv_y, "true label", int(y[i]))#, adv_example)
-                verify_example_outcome(at, base_example, pred_y, f"LT normal example {i} label doesn't match")
-                verify_example_outcome(at, adv_example, adv_y, f"LT adv example {i} label doesn't match")
-                adv_examples.append(adv_example)
+                pred_y, adv_y, score, adv_score, adv_example = _parse_adv_example_str(base_example, value)
+
+                #print(f"LT-attack lt: {score:10.5f} -> {adv_score:10.5f}")
+                #print(f"          at: {at.eval(base_example)[0]:10.5f} ->",
+                #      f"{at.eval(adv_example)[0]:10.5f},",
+                #      f"pred_y={pred_y}, adv_y={adv_y}")
+
+                if pred_y == adv_y:
+                    adv_examples.append("NOT_ADVERSARIAL")
+                elif abs(adv_score - at.eval(adv_example)[0]) > 1e-4:
+                    adv_examples.append("ADV_SCORE_NOT_EQUAL")
+                else:
+                    adv_examples.append(adv_example)
             elif key == "TIME":
                 adv_times.append(float(value))
             elif key == "INCORRECT_PREDICTION":
-                print("INCORRECT", value)
+                #print("INCORRECT", value)
                 adv_examples.append("INCORRECT")
                 adv_times.append(0.0)
             else:
@@ -99,6 +109,7 @@ def get_adversarial_examples(d, indices, at, N, debug=False):
 
     chunk_size = 100
     advs = []
+    nfails = 0
     i = 0
 
     while len(advs) < N:
@@ -108,12 +119,18 @@ def get_adversarial_examples(d, indices, at, N, debug=False):
         Xsub = d.X.iloc[r, :].to_numpy()
         ysub = d.y[r].to_numpy()
 
+        print(f"LT-attack: {len(advs)}/{N}, nfails={nfails}")
         adv_examples, adv_times = _call_lt_attack(at, Xsub, ysub, debug)
 
         # remove fails
         for adv_example, time in zip(adv_examples, adv_times):
             example = d.X.iloc[indices[i], :].to_numpy()
             if not isinstance(adv_example, str):
+                #analyze_advs_boxes(d, at, [{"base_example": example, "adv_example": adv_example}])
+                verify_example_outcome(at, example, d.y[indices[i]]==1.0,
+                                       f"LT normal example {i}/{indices[i]} label doesn't match")
+                verify_example_outcome(at, adv_example, d.y[indices[i]]!=1.0,
+                                       f"LT adv example {i}/{indices[i]} label doesn't match")
                 advs.append({
                     "index": indices[i],
                     "time": time,
@@ -124,7 +141,8 @@ def get_adversarial_examples(d, indices, at, N, debug=False):
                     "linf": linf(example, adv_example)
                 })
             else:
-                print(f"LT-ATTACK {adv_example} for index {indices[i]}")
+                nfails += 1
+                print(f"LT-ATTACK {adv_example} for index {i}/{indices[i]}")
 
             i += 1
 
