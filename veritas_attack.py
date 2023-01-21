@@ -37,9 +37,9 @@ def get_closest_adversarial_examples(d, indices, at, N, max_time=10, delta_multi
             print(f"i={i}: NO ADV.EX. FOUND, y={at.eval(example)[0]:.3f}")
             nfail += 1
             continue
-        print()
 
         tstop = time.time()
+        #analyze_advs_boxes(d, at, [{"base_example": example, "adv_example": adv_example}])
         verify_example_outcome(at, adv_example, target_output,
                                f"KAN adv example {i} label doesn't match")
 
@@ -54,6 +54,7 @@ def get_closest_adversarial_examples(d, indices, at, N, max_time=10, delta_multi
         })
 
         if len(kan_advs) >= N: break
+        print()
 
     return kan_advs
 

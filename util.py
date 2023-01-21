@@ -38,6 +38,32 @@ MAX_TIME = {
     "Webspam":   10,
 }
 
+CUBE_MULTIPLIER = {
+    "Phoneme":   5.0,
+    "Spambase":  5.0,
+    "CalhouseClf": 5.0,
+    "Electricity": 5.0,
+    "CovtypeNormalized":   5.0,
+    "Higgs":     5.0,
+    "Ijcnn1":    5.0,
+    "MnistBinClass2v4":  20.0,
+    "FashionMnistBinClass2v4": 10.0,
+    "Webspam":   5.0,
+}
+
+CUBE_NTRIALS = {
+    "Phoneme":   1000,
+    "Spambase":  1000,
+    "CalhouseClf": 1000,
+    "Electricity": 1000,
+    "CovtypeNormalized":   1000,
+    "Higgs":     1000,
+    "Ijcnn1":    1000,
+    "MnistBinClass2v4": 2500,
+    "FashionMnistBinClass2v4": 2000,
+    "Webspam":   1000,
+}
+
 def dump(fname, data):
     joblib.dump(data, fname, compress=True)
     print(f"Results written to {fname}")
@@ -110,6 +136,9 @@ def get_correct_test_example_indices(d, at, fold):
 def verify_example_outcome(at, example, expected_y, msg):
     y_score = at.eval(example)[0]
     y_at = int(y_score > 0.0)
+    if y_score == 0.0: # tie breaker RFs
+        print("TIE BREAKER!! y_score=0.0")
+        y_at = expected_y
     assert y_at == expected_y, \
             f"{msg}: y_at {y_at} (score={y_score:.3f}), " \
             f"expected_y {expected_y} for example {example}"

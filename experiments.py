@@ -68,8 +68,8 @@ def per_dataset_perf(dataset, model_type, N, ratio, fold, nfolds, cache_dir, deb
     lt_advs, kan_advs, ver_advs, cub_advs = get_adversarial_examples(
             adv_name_template, d, at, indices, N,
             cache=debug is None,
-            cube_multiplier=10.0 if "Mnist" in d.name() or "Spambase" in d.name() else 5.0,
-            cube_ntrials=1000)
+            cube_multiplier=CUBE_MULTIPLIER[d.name()],
+            cube_ntrials=CUBE_NTRIALS[d.name()])
 
     #for k1 in ["index", "adv_score", "linf", "time"]:
     #    print("==", k1, "==")
