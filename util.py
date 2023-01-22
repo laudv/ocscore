@@ -12,6 +12,9 @@ from sklearn.neighbors import LocalOutlierFactor
 SEED = 10
 NFOLDS = 5
 
+USED_DATASETS = ["calhouse", "electricity", "covtype", "higgs",
+                 "ijcnn1", "mnist2v4", "fmnist2v4", "webspam"]
+
 INPUT_DELTA = {
     "Phoneme":   0.05,
     "Spambase":  0.05,
@@ -64,6 +67,17 @@ CUBE_NTRIALS = {
     "Webspam":   1000,
 }
 
+def fmt_val_std(v, e, best):
+    sv = f"{v:1.2f}".lstrip("0")
+    se = f"{e:1.2f}".lstrip("0")
+
+    if sv == "1.00":
+        sv = "1.0"
+
+    sb = "\\bf" if abs(v-best)<0.01 else ""
+
+    return f"{sb}{sv}{{\\tiny±{se}}}"
+
 def dump(fname, data):
     joblib.dump(data, fname, compress=True)
     print(f"Results written to {fname}")
@@ -88,17 +102,18 @@ def get_adv_filename(d, seed, fold, N, model_type, num_trees, tree_depth, lr, ca
                f"{model_type}{num_trees}-{tree_depth}-{lr*100:.0f}.joblib")
     return filename
 
-def get_model(dataset, model_type, fold, lr, num_trees, tree_depth, groot_epsilon=None):
+def get_model(d, model_type, fold, lr, num_trees, tree_depth, groot_epsilon=None):
+    d.nthreads = 1
     if model_type == "xgb":
-        model, meta = dataset.get_xgb_model(fold, lr, num_trees, tree_depth)
+        model, meta = d.get_xgb_model(fold, lr, num_trees, tree_depth)
     elif model_type == "rf":
-        model, meta = dataset.get_rf_model(fold, num_trees, tree_depth=None)
+        model, meta = d.get_rf_model(fold, num_trees, tree_depth=None)
     elif model_type == "groot":
         if groot_epsilon is None:
             raise RuntimeError("pass epsilon for groot")
-        model, meta = dataset.get_groot_model(fold, num_trees, tree_depth, groot_epsilon)
+        model, meta = d.get_groot_model(fold, num_trees, tree_depth, groot_epsilon)
     else: raise RuntimeError(f"invalid model type {model_type}")
-    at = dataset.get_addtree(model, meta)
+    at = d.get_addtree(model, meta)
     print(f"{model_type} model {meta['metric']}")
     return model, meta, at
 

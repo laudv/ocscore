@@ -1,4 +1,4 @@
-import click
+import click, sys
 import numpy as np
 import pandas as pd
 
@@ -13,7 +13,7 @@ from pprint import pprint
 @click.argument("dataset", type=click.UNPROCESSED, callback=get_dataset)
 @click.option("-m", "--model_type", type=click.Choice(["xgb", "rf", "groot"]), default="xgb")
 @click.option("-N", "N", default=100)
-@click.option("--ratio", default=5)
+@click.option("--ratio", default=4)
 @click.option("--fold", default=0)
 @click.option("--nfolds", default=NFOLDS)
 @click.option("--cache_dir", default="cache", show_default=True)
@@ -314,7 +314,7 @@ def vary_refset_size_combined(model_type, N, ratio, nfolds, cache_dir, seed):
 
     vary_refset_report = {}
 
-    dnames = ["phoneme", "covtype", "mnist2v4", "ijcnn1", "webspam", "calhouse", "fmnist2v4"]
+    dnames = USED_DATASETS
     for dname in dnames:
         dataset = parse_dataset(dname)
         vary_refset_report[dname] = []

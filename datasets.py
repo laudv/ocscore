@@ -9,7 +9,7 @@ THE_DATASETS = {
     "higgs": "Higgs_100-8-10",
     "ijcnn1": "Ijcnn1_50-5-90",
     "mnist2v4": "MnistBinClass[2,4]_50-5-70",
-    "fmnist2v4": "FashionMnistBinClass[2,4]_50-5-90",
+    "fmnist2v4": "FashionMnistBinClass[2,4]_100-4-10",
     "webspam": "Webspam_50-5-90",
 }
 

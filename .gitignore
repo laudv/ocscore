@@ -3,6 +3,7 @@ cache_pinacs/
 build/
 figures/
 __pycache__/
+bin/
 models/
 env.sh
 *.so

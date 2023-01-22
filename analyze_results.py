@@ -12,10 +12,10 @@ from util import *
 from datasets import THE_DATASETS, parse_dataset
 
 from pprint import pprint
-from sklearn.metrics import roc_auc_score, auc
+from sklearn.metrics import roc_auc_score, auc, accuracy_score
 from sklearn.neighbors import KernelDensity
 
-DETECT_ALGS = ["ocscore", "ambig", "iforest", "mlloo"]
+DETECT_ALGS = ["ocscore", "ambig", "iforest", "lof", "mlloo"]
 ADV_SETS = ["lt", "kan", "ver", "cub"]
 
 CONF_BUCKETS = np.linspace(0.0, 1.0, 4)
@@ -29,6 +29,7 @@ ALG_LS = {
     "ocscore": "-",
     "ambig": "--",
     "iforest": ":",
+    "lof": (5, (10, 3)),
     "mlloo": "-.",
 }
 SET_HATCH = {
@@ -473,10 +474,11 @@ def collect_results_dataset(dataset, model_type, N, ratio, nfolds, cache_dir, se
                 per_set_alg[adv_set][detect_alg][f"{k}_std"] =\
                         np.std([x[adv_set][detect_alg][k] for x in per_set_alg_all])
     for adv_set in ADV_SETS:
-        per_set[adv_set]["delta_mean"] = np.mean([x[adv_set]["delta"].mean()
-                                                  for x in per_set_all])
-        per_set[adv_set]["delta_std"] = np.std([x[adv_set]["delta"].mean()
-                                                for x in per_set_all])
+        for k in ["delta"]:
+            per_set[adv_set][f"{k}_mean"] = np.mean([x[adv_set][k].mean()
+                                                      for x in per_set_all])
+            per_set[adv_set][f"{k}_std"] = np.std([x[adv_set][k].mean()
+                                                    for x in per_set_all])
 
     for detect_alg in DETECT_ALGS:
         for k in ["acc_sample", "threshold", "acc_aggr", "auc_aggr"]:
@@ -484,6 +486,8 @@ def collect_results_dataset(dataset, model_type, N, ratio, nfolds, cache_dir, se
                                                       for x in per_alg_all])
             per_alg[detect_alg][f"{k}_std"] = np.std([x[detect_alg][k].mean()
                                                     for x in per_alg_all])
+        per_alg[detect_alg]["setup_time_mean"] = np.mean([x[detect_alg]["setup_time"]
+                                                          for x in per_alg_all])
 
     # combine all is_adv_pred's over all folds, together with conf & delta
     conf_sample = np.hstack(conf_sample)
@@ -535,18 +539,19 @@ def collect_results(dnames, model_type, N, ratio, nfolds, cache_dir, seed):
     return per_set, per_alg, per_set_alg, per_confdelta
 
 
-def display_results(per_set, per_alg, per_set_alg):
+def display_results(per_set, per_alg, per_set_alg, model_type):
     dnames = list(per_set.keys())
-    df_auc_per_alg = pd.DataFrame("-", index=THE_DATASETS, columns=DETECT_ALGS)
-    df_acc_per_alg = pd.DataFrame("-", index=THE_DATASETS, columns=DETECT_ALGS)
+    df_auc_per_alg = pd.DataFrame("-", index=USED_DATASETS, columns=DETECT_ALGS)
+    df_acc_per_alg = pd.DataFrame("-", index=USED_DATASETS, columns=DETECT_ALGS)
     df_auc_per_set = pd.DataFrame("-", index=DETECT_ALGS, columns=ADV_SETS)
 
     set_kinds = ["low confidence", "high confidence"]
     df_auc_per_kind = pd.DataFrame("-", index=DETECT_ALGS, columns=set_kinds)
 
     index = pd.MultiIndex.from_product([DETECT_ALGS, ADV_SETS], names=["Algorithm", "Set"])
-    df_auc = pd.DataFrame("-", index=index, columns=THE_DATASETS)
-    df_time = pd.DataFrame("-", index=THE_DATASETS, columns=DETECT_ALGS)
+    df_auc = pd.DataFrame("-", index=index, columns=USED_DATASETS)
+    df_time = pd.DataFrame("-", index=USED_DATASETS, columns=DETECT_ALGS)
+    df_setup_time = pd.DataFrame("-", index=USED_DATASETS, columns=DETECT_ALGS)
 
     for dname in dnames:
         ps = per_set[dname]
@@ -559,8 +564,7 @@ def display_results(per_set, per_alg, per_set_alg):
         for detect_alg in pa.keys():
             v = pa[detect_alg]["auc_aggr_mean"]
             e = pa[detect_alg]["auc_aggr_std"]
-            best = "\\bf" if np.abs(v-aucmax)<0.01 else ""
-            df_auc_per_alg.loc[dname, detect_alg] = f"{best}{v:1.2f}{{\\tiny±{e:1.2f}}}"
+            df_auc_per_alg.loc[dname, detect_alg] = fmt_val_std(v, e, aucmax)
             df_acc_per_alg.loc[dname, detect_alg] = pa[detect_alg]["acc_aggr_mean"]
 
             v = np.sum([psa[a][detect_alg]["time_mean"] for a in psa.keys()]) / (5*2500) * 1000
@@ -568,14 +572,13 @@ def display_results(per_set, per_alg, per_set_alg):
             #df_time.loc[dname, detect_alg] = f"{v:1.2f}{{\\tiny±{e:1.2f}}}"
             df_time.loc[dname, detect_alg] = f"{v:1.3f}"
 
+            v = pa[detect_alg]["setup_time_mean"]
+            df_setup_time.loc[dname, detect_alg] = f"{v:1.3f}"
+
             for adv_set in ADV_SETS:
                 v = psa[adv_set][detect_alg]["auc_mean"]
                 e = psa[adv_set][detect_alg]["auc_std"]
-                best = "\\bf" if np.abs(v-aucmax_ps[adv_set])<max(0.001, e) else ""
-                df_auc.loc[(detect_alg, adv_set), dname] = f"{best}{v:1.2f}{{\\tiny±{e:1.2f}}}"
-
-        for adv_set in pa.keys():
-            pass
+                df_auc.loc[(detect_alg, adv_set), dname] = fmt_val_std(v, e, aucmax_ps[adv_set])
 
     # Per set performance of each alg, averaged over all datasets
     for adv_set in ADV_SETS:
@@ -590,8 +593,7 @@ def display_results(per_set, per_alg, per_set_alg):
         for detect_alg, vs in aucs.items():
             v = np.mean(aucs[detect_alg])
             e = np.std(aucs[detect_alg])
-            best = "\\bf" if np.abs(v-aucmax)<0.01 else ""
-            df_auc_per_set.loc[detect_alg, adv_set] = f"{best}{v:1.2f}{{\\tiny±{e:1.2f}}}"
+            df_auc_per_set.loc[detect_alg, adv_set] = fmt_val_std(v, e, aucmax)
 
     # Per set 'kind' performance of each alg, averaged over all datasets
     for kind, adv_sets in zip(set_kinds, [["lt", "kan"], ["ver", "cub"]]):
@@ -609,12 +611,11 @@ def display_results(per_set, per_alg, per_set_alg):
         for detect_alg, vs in aucs.items():
             v = np.mean(aucs[detect_alg])
             e = np.std(aucs[detect_alg])
-            best = "\\bf" if np.abs(v-aucmax)<0.01 else ""
-            df_auc_per_kind.loc[detect_alg, kind] = f"{best}{v:1.2f}{{\\tiny±{e:1.2f}}}"
+            df_auc_per_kind.loc[detect_alg, kind] = fmt_val_std(v, e, aucmax)
 
     print("\nauc_aggr AUC aggregated over all sets")
     print(df_auc_per_alg)
-    with open(os.path.join(TABLE_DIR, "auc_aggr_table.tex"), "w") as f:
+    with open(os.path.join(TABLE_DIR, f"auc_aggr_table_{model_type}.tex"), "w") as f:
         #df_auc_per_alg.columns = [f"{{{x}}}" for x in df_auc_per_alg.columns]
         df_auc_per_alg.to_latex(buf=f, longtable=False, escape=False,
                 column_format="l"+"l"*df_auc_per_alg.shape[1])
@@ -622,26 +623,113 @@ def display_results(per_set, per_alg, per_set_alg):
     print("\nauc_aggr AUC aggregated over all datasets")
     print(df_auc_per_set)
     print(df_auc_per_kind)
-    with open(os.path.join(TABLE_DIR, "auc_aggr_per_set_table.tex"), "w") as f:
+    with open(os.path.join(TABLE_DIR, f"auc_aggr_per_set_table_{model_type}.tex"), "w") as f:
         #df_auc_per_alg.columns = [f"{{{x}}}" for x in df_auc_per_alg.columns]
         df_auc_per_kind.to_latex(buf=f, longtable=False, escape=False,
                 column_format="l"+"c"*df_auc_per_kind.shape[1])
 
     print("\nDF AUC")
     print(df_auc)
-    with open(os.path.join(TABLE_DIR, "auc_table.tex"), "w") as f:
+    with open(os.path.join(TABLE_DIR, f"auc_table_{model_type}.tex"), "w") as f:
         #df_auc_per_alg.columns = [f"{{{x}}}" for x in df_auc_per_alg.columns]
         df_auc.to_latex(buf=f, longtable=False, escape=False,
                 column_format="ll"+"l"*df_auc.shape[1])
 
     print("\nDF TIME")
     print(df_time)
-    with open(os.path.join(TABLE_DIR, "time_table.tex"), "w") as f:
+    with open(os.path.join(TABLE_DIR, f"time_table_{model_type}.tex"), "w") as f:
         #df_auc_per_alg.columns = [f"{{{x}}}" for x in df_auc_per_alg.columns]
         df_time.to_latex(buf=f, longtable=False, escape=False,
                 column_format="l"+"l"*df_time.shape[1])
 
-def plot_confdelta(per_confdelta, per_alg):
+    print("\nDF SETUP TIME")
+    print(df_setup_time)
+    with open(os.path.join(TABLE_DIR, f"setup_time_table_{model_type}.tex"), "w") as f:
+        #df_auc_per_alg.columns = [f"{{{x}}}" for x in df_auc_per_alg.columns]
+        df_setup_time.to_latex(buf=f, longtable=False, escape=False,
+                column_format="l"+"l"*df_setup_time.shape[1])
+
+def dataset_prop_table(N, ratio, nfolds, cache_dir, seed):
+    columns_tex = ["$\#F$", "$n$", "$\\eta$", "$M$", "$d_T$"]
+    columns = ["nfeat", "nexamples", "lr", "ntrees", "tree_depth"]
+    df_dsets = pd.DataFrame("-", index=USED_DATASETS, columns=columns)
+
+    columns2_tex = ["$\#F$", "$n$", "$\\eta$", "$M$", "$d_T$"]
+    columns2 = pd.MultiIndex.from_product([["xgb", "rf"],
+                                           ["acc train", "acc test", "refset"]],
+                                          names=["", ""])
+    df_metrics = pd.DataFrame(0.0, index=USED_DATASETS, columns=columns2)
+
+    for dname in USED_DATASETS:
+    #for dname in ["mnist2v4", "fmnist2v4"]:
+        d, num_trees, tree_depth, lr = parse_dataset(dname)
+        d.seed = seed
+        d.nfolds = nfolds
+        d.load_dataset()
+        d.minmax_normalize()
+
+        df_dsets.loc[dname, "nfeat"] = d.X.shape[1]
+        df_dsets.loc[dname, "nexamples"] = f"{d.X.shape[0]/1000:.1f}k"
+        df_dsets.loc[dname, "lr"] = lr
+        df_dsets.loc[dname, "ntrees"] = num_trees
+        df_dsets.loc[dname, "tree_depth"] = tree_depth
+
+        for model_type in ["xgb", "rf"]:
+            for fold in range(nfolds):
+                model, meta, at = get_model(d, model_type, fold, lr, num_trees,
+                                            tree_depth,
+                                            groot_epsilon=INPUT_DELTA[d.name()])
+                full_refset0, full_refset1, refset_time = get_refset(d, at, fold)
+                xtrain, ytrain, xtest, ytest = d.train_and_test_set(fold)
+                xtrain, ytrain = xtrain.to_numpy(), ytrain.to_numpy()
+                xtest, ytest = xtest.to_numpy(), ytest.to_numpy()
+
+                acc_train = accuracy_score(ytrain, at.eval(xtrain) > 0.0)
+                acc_test = accuracy_score(ytest, at.eval(xtest) > 0.0)
+
+                refset_size = full_refset0.shape[0] + full_refset1.shape[0]
+
+                print(f"REFSET {dname} {model_type} {fold}: {refset_time:.1f}s, "\
+                      f"{full_refset0.shape[0]} + {full_refset1.shape[0]}, "\
+                      f"{acc_train*100:.1f}%, {meta['metric'][1]*100:.1f}%, {acc_test*100:.1f}%")
+
+                df_metrics.loc[dname, (model_type, "refset")] += refset_size
+                df_metrics.loc[dname, (model_type, "acc train")] += acc_train
+                df_metrics.loc[dname, (model_type, "acc test")] += acc_test
+
+    print("\nDF DATASET PROPERTIES")
+    print(df_dsets)
+    with open(os.path.join(TABLE_DIR, f"datasets_table.tex"), "w") as f:
+        #df_auc_per_alg.columns = [f"{{{x}}}" for x in df_auc_per_alg.columns]
+        df_dsets.columns = columns_tex
+        df_dsets.to_latex(buf=f, longtable=False, escape=False,
+                column_format="l"+"r"*df_dsets.shape[1])
+
+    print("\nDF DATASET PROPERTIES 2")
+    df_metrics /= nfolds
+    df_metrics.loc[:, ("xgb", "acc train")] = [f"{x*100:.1f}\\%"
+                                         for x in df_metrics.loc[:, ("xgb", "acc train")]]
+    df_metrics.loc[:, ("rf", "acc train")] = [f"{x*100:.1f}\\%"
+                                        for x in df_metrics.loc[:, ("rf", "acc train")]]
+    df_metrics.loc[:, ("xgb", "acc test")] = [f"{x*100:.1f}\\%"
+                                         for x in df_metrics.loc[:, ("xgb", "acc test")]]
+    df_metrics.loc[:, ("rf", "acc test")] = [f"{x*100:.1f}\\%"
+                                        for x in df_metrics.loc[:, ("rf", "acc test")]]
+    df_metrics.loc[:, ("xgb", "refset")] = [f"{x/1000:.1f}k"
+                                         for x in df_metrics.loc[:, ("xgb", "refset")]]
+    df_metrics.loc[:, ("rf", "refset")] = [f"{x/1000:.1f}k"
+                                        for x in df_metrics.loc[:, ("rf", "refset")]]
+    df_metrics.columns = pd.MultiIndex.from_product([["\\bf XGB", "\\bf RF"],
+                                             ["acc. train", "acc. test", "$|R|$"]],
+                                            names=["", ""])
+    print(df_metrics)
+    with open(os.path.join(TABLE_DIR, f"datasets_metrics_table.tex"), "w") as f:
+        #df_auc_per_alg.columns = [f"{{{x}}}" for x in df_auc_per_alg.columns]
+        #df_metrics.columns = columns2_tex
+        df_metrics.to_latex(buf=f, longtable=False, escape=False,
+                column_format="l"+"r"*df_metrics.shape[1])
+
+def plot_confdelta(per_confdelta, name, model_type):
     dnames = per_confdelta.keys()
     fig, axs = plt.subplots(2, len(dnames),
                             figsize=(6.2, 2.0),
@@ -652,7 +740,6 @@ def plot_confdelta(per_confdelta, per_alg):
 
     for ax, axl, dname in zip(axs[0, :], axs[1, :], dnames):
         pcd = per_confdelta[dname]
-        pa = per_alg[dname]
         conf = pcd["conf"]
         #conf = pcd["delta"]
 
@@ -691,7 +778,6 @@ def plot_confdelta(per_confdelta, per_alg):
 
         lines = []
         for detect_alg in DETECT_ALGS:
-            threshold = 1.0 - 0.5*pa[detect_alg]["threshold_mean"]
             is_adv_pred = pcd["is_adv_pred"][detect_alg]
             is_correct = is_adv == is_adv_pred
             acc_per_conf = []
@@ -700,12 +786,6 @@ def plot_confdelta(per_confdelta, per_alg):
                 acc_per_conf.append(is_correct[mask].mean())
             l, = ax.plot(ns, acc_per_conf, label=detect_alg, ls=ALG_LS[detect_alg])
             lines.append(l)
-
-            #if detect_alg == "ambig":
-            #    thrs_idx = np.argmin(np.maximum(0.0, threshold-xs2))
-            #    print("thrs_idx", thrs_idx, xs2[thrs_idx], threshold)
-            #    ax.plot([ns[thrs_idx]], [0.0], "^", c=l.get_color())
-
 
         #axl.set_xlabel("Confidence")
         axl.set_xlabel("fraction of examples")
@@ -748,7 +828,7 @@ def plot_confdelta(per_confdelta, per_alg):
     axs[1, 0].set_ylabel("Conf.")
 
     if SAVEFIGS:
-        figname = "acc_per_conf"
+        figname = f"acc_per_conf_{name}_{model_type}"
         fig.savefig(os.path.join("figures", f"{figname}.svg"))
         subprocess.run(["/home/laurens/repos/dotfiles/scripts/svg2latex", f"{figname}.svg"], cwd="figures")
         shutil.copyfile(os.path.join("figures", f"{figname}.pdf_tex"),
@@ -1014,14 +1094,14 @@ def plot_accs(all_accs):
     plt.show()
 
 
-def plot_vary_refset_size(r, model_type):
+def plot_vary_refset_size(r, dnames, name, model_type):
     markers = ["o", "x", "D", "v", "^", "s", "h", "H"]
     lstyles = list(ALG_LS.values())
     cmap = cm.get_cmap("tab10")
     fig, axs = plt.subplots(1, 2, figsize=(3.2, 1.5), num=f"subset")
     fig.subplots_adjust(left=0.15, bottom=0.22, right=0.96, top=0.82, wspace=0.45, hspace=0.60)
 
-    for i, dname in enumerate(["covtype", "mnist2v4", "ijcnn1"]):
+    for i, dname in enumerate(dnames):
         data = r[dname]
         subsets = data[0]["subsets"]
         for j, k in [(0, "aucs"), (1, "times")]:
@@ -1031,7 +1111,8 @@ def plot_vary_refset_size(r, model_type):
                 a = np.vstack([data[fold][k] for fold in range(len(data))])
             y = a.mean(axis=0)
             e = a.std(axis=0)
-            axs[j].errorbar(subsets, y, yerr=e, fmt=lstyles[i],
+            axs[j].errorbar(subsets, y, yerr=e,
+                    linestyle=lstyles[i],
                     marker=markers[i],
                     color=cmap(i), markersize=3, label=dname)
             axs[j].set_xlabel("subset size")
@@ -1043,7 +1124,7 @@ def plot_vary_refset_size(r, model_type):
 
     #axs[0].legend()
     handles, labels = axs.ravel()[0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc="upper center", ncol=4)
+    fig.legend(handles, labels, loc="upper center", ncol=4, columnspacing=1.4)
     axs[0].set_ylim([0.5, 1.01])
     axs[0].set_ylabel("ROC AUC")
     axs[1].set_ylabel("time fraction")
@@ -1060,9 +1141,10 @@ def plot_vary_refset_size(r, model_type):
     #ax2.plot((1 - d, 1 + d), (1 - d, 1 + d), **kwargs)  # bottom-right diagonal
 
     if SAVEFIGS:
-        figname = f"vary_refset_size_{model_type}"
+        figname = f"vary_refset_size_{name}_{model_type}"
         fig.savefig(os.path.join("figures", f"{figname}.svg"))
-        subprocess.run(["/home/laurens/repos/dotfiles/scripts/svg2latex", f"{figname}.svg"], cwd="figures")
+        subprocess.run(["/home/laurens/repos/dotfiles/scripts/svg2latex",
+                        f"{figname}.svg"], cwd="figures")
         shutil.copyfile(os.path.join("figures", f"{figname}.pdf_tex"),
                         os.path.join(FIG_DIR, f"{figname}.pdf_tex"))
         shutil.copyfile(os.path.join("figures", f"{figname}.pdf"),
@@ -1107,28 +1189,47 @@ def analyze(model_type, N, ratio, nfolds, cache_dir, seed):
     global SAVEFIGS
     SAVEFIGS=True
 
-    #dnames = ["phoneme"]
-    dnames = ["phoneme", "covtype", "mnist2v4", "ijcnn1", "webspam", "calhouse", "fmnist2v4"]
-    #dnames = ["covtype", "mnist2v4", "ijcnn1", "calhouse"]
-    #dnames = ["mnist2v4", "fmnist2v4"]
+    # python analyze_results.py -N 500 --cache_dir=cache_pinacs --ratio 4
 
-    per_set, per_alg, per_set_alg, per_confdelta = collect_results(dnames,
-                                                                   model_type,
-                                                                   N, ratio,
-                                                                   nfolds,
-                                                                   cache_dir,
-                                                                   seed)
-    display_results(per_set, per_alg, per_set_alg)
-    #plot_confdelta(per_confdelta, per_alg)
-    #plot_confdist2(per_confdelta, model_type)
+#    #dnames = ["phoneme"]
+#    dnames = USED_DATASETS
+#    #dnames = ["electricity", "covtype", "ijcnn1", "mnist2v4"]
+#    #dnames = ["mnist2v4", "fmnist2v4"]
+#
+#    per_set, per_alg, per_set_alg, per_confdelta = collect_results(dnames,
+#                                                                   model_type,
+#                                                                   N, ratio,
+#                                                                   nfolds,
+#                                                                   cache_dir,
+#                                                                   seed)
+#    display_results(per_set, per_alg, per_set_alg, model_type) # all datasets
+#
+#    set1 = ["electricity", "covtype", "ijcnn1", "mnist2v4"]
+#    set2 = [s for s in per_confdelta if s not in set1]
+#
+#    plot_confdelta({k: v for k, v in per_confdelta.items() if k in set1},
+#                   "set1", model_type)
+#    plot_confdelta({k: v for k, v in per_confdelta.items() if k in set2},
+#                   "set2", model_type)
+#
+#    plot_confdist2(per_confdelta, model_type) # all datasets
 
 
     ###########
 
     
-    # python analyze_results.py -N 500 --cache_dir=cache_pinacs --ratio 4
-    #plot_vary_refset_size(load(os.path.join(cache_dir, f"vary_refszet_size_{model_type}.joblib")), model_type)
+#    # python analyze_results.py -N 500 --cache_dir=cache_pinacs --ratio 4
+#    r = load(os.path.join(cache_dir, f"vary_refszet_size_{model_type}.joblib"))
+#    set1 = ["covtype", "mnist2v4", "ijcnn1"]
+#    set2 = set1 + ["electricity"]
+#    set3 = [s for s in USED_DATASETS if s not in set2]
+#    plot_vary_refset_size(r, set1, "set1", model_type)
+#    plot_vary_refset_size(r, set2, "set2", model_type)
+#    plot_vary_refset_size(r, set3, "set3", model_type)
 
+    ###########
+
+    dataset_prop_table(N, ratio, nfolds, cache_dir, seed)
     
 
 if __name__ == "__main__":
