@@ -27,7 +27,7 @@ def per_dataset_perf(dataset, model_type, N, ratio, fold, nfolds, cache_dir, deb
     d.minmax_normalize()
 
     model, meta, at = get_model(d, model_type, fold, lr, num_trees, tree_depth,
-            groot_epsilon=INPUT_DELTA[d.name()])
+            groot_epsilon=0.5*INPUT_DELTA[d.name()])
 
     report = {"model_meta":  meta}
     report_name = get_report_name(d, seed, fold, N, ratio, model_type,
@@ -68,6 +68,8 @@ def per_dataset_perf(dataset, model_type, N, ratio, fold, nfolds, cache_dir, deb
     lt_advs, kan_advs, ver_advs, cub_advs = get_adversarial_examples(
             adv_name_template, d, at, indices, N,
             cache=debug is None,
+            force_from_file=False, # generate new ones if necessary
+            kan_multiplier=1.0,
             cube_multiplier=CUBE_MULTIPLIER[d.name()],
             cube_ntrials=CUBE_NTRIALS[d.name()])
 
@@ -226,7 +228,7 @@ def vary_refset_size(dataset, model_type, N, ratio, fold, nfolds, cache_dir, see
     d.minmax_normalize()
 
     model, meta, at = get_model(d, model_type, fold, lr, num_trees, tree_depth,
-            groot_epsilon=INPUT_DELTA[d.name()])
+            groot_epsilon=0.5*INPUT_DELTA[d.name()])
 
     report = {
         #"model_meta": meta,
@@ -252,8 +254,7 @@ def vary_refset_size(dataset, model_type, N, ratio, fold, nfolds, cache_dir, see
     indices = get_correct_test_example_indices(d, at, fold)
     alladvs = get_adversarial_examples(
             adv_name_template, d, at, indices, N,
-            cache=True,
-            cube_multiplier=10.0 if "Mnist" in d.name() else 5.0)
+            force_from_file=True)
 
     # A second set of original test set examples
     rng = np.random.default_rng(29*fold + 3*nfolds + seed)

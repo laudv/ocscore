@@ -109,7 +109,7 @@ def collect_aucs_per_conf_for_dataset(dataset, model_type, N, ratio, nfolds,
 
         model, meta, at = get_model(d, model_type, fold, lr, num_trees,
                                     tree_depth,
-                                    groot_epsilon=INPUT_DELTA[d.name()])
+                                    groot_epsilon=0.5*INPUT_DELTA[d.name()])
 
         report = load(report_name)
         sample_indices = report["sample_indices"]
@@ -219,7 +219,7 @@ def collect_accs_fixed_threshold_for_dataset(dataset, model_type, N, ratio,
 
         model, meta, at = get_model(d, model_type, fold, lr, num_trees,
                                     tree_depth,
-                                    groot_epsilon=INPUT_DELTA[d.name()])
+                                    groot_epsilon=0.5*INPUT_DELTA[d.name()])
 
         report = load(report_name)
         sample_indices = report["sample_indices"]
@@ -368,7 +368,7 @@ def collect_results_dataset(dataset, model_type, N, ratio, nfolds, cache_dir, se
 
         model, meta, at = get_model(d, model_type, fold, lr, num_trees,
                                     tree_depth,
-                                    groot_epsilon=INPUT_DELTA[d.name()])
+                                    groot_epsilon=0.5*INPUT_DELTA[d.name()])
 
         report = load(report_name)
         sample_indices = report["sample_indices"]
@@ -552,6 +552,7 @@ def display_results(per_set, per_alg, per_set_alg, model_type):
     df_auc = pd.DataFrame("-", index=index, columns=USED_DATASETS)
     df_time = pd.DataFrame("-", index=USED_DATASETS, columns=DETECT_ALGS)
     df_setup_time = pd.DataFrame("-", index=USED_DATASETS, columns=DETECT_ALGS)
+    df_delta = pd.DataFrame("-", index=USED_DATASETS, columns=ADV_SETS)
 
     for dname in dnames:
         ps = per_set[dname]
@@ -579,6 +580,13 @@ def display_results(per_set, per_alg, per_set_alg, model_type):
                 v = psa[adv_set][detect_alg]["auc_mean"]
                 e = psa[adv_set][detect_alg]["auc_std"]
                 df_auc.loc[(detect_alg, adv_set), dname] = fmt_val_std(v, e, aucmax_ps[adv_set])
+
+        for adv_set in ADV_SETS:
+            v = ps[adv_set]["delta_mean"]
+            #e = ps[adv_set]["delta_std"]
+            #df_delta.loc[dname, adv_set] = fmt_val_std(v, e, 99.0)
+            df_delta.loc[dname, adv_set] = f"{v:1.4f}".lstrip("0")
+            
 
     # Per set performance of each alg, averaged over all datasets
     for adv_set in ADV_SETS:
@@ -649,13 +657,21 @@ def display_results(per_set, per_alg, per_set_alg, model_type):
         df_setup_time.to_latex(buf=f, longtable=False, escape=False,
                 column_format="l"+"l"*df_setup_time.shape[1])
 
+    print("\nDF DELTA")
+    print(df_delta)
+    with open(os.path.join(TABLE_DIR, f"delta_table_{model_type}.tex"), "w") as f:
+        #df_auc_per_alg.columns = [f"{{{x}}}" for x in df_auc_per_alg.columns]
+        df_delta.to_latex(buf=f, longtable=False, escape=False,
+                column_format="l"+"l"*df_delta.shape[1])
+
 def dataset_prop_table(N, ratio, nfolds, cache_dir, seed):
     columns_tex = ["$\#F$", "$n$", "$\\eta$", "$M$", "$d_T$"]
     columns = ["nfeat", "nexamples", "lr", "ntrees", "tree_depth"]
     df_dsets = pd.DataFrame("-", index=USED_DATASETS, columns=columns)
 
     columns2_tex = ["$\#F$", "$n$", "$\\eta$", "$M$", "$d_T$"]
-    columns2 = pd.MultiIndex.from_product([["xgb", "rf"],
+    model_types = ["xgb", "rf", "groot"]
+    columns2 = pd.MultiIndex.from_product([model_types,
                                            ["acc train", "acc test", "refset"]],
                                           names=["", ""])
     df_metrics = pd.DataFrame(0.0, index=USED_DATASETS, columns=columns2)
@@ -674,11 +690,11 @@ def dataset_prop_table(N, ratio, nfolds, cache_dir, seed):
         df_dsets.loc[dname, "ntrees"] = num_trees
         df_dsets.loc[dname, "tree_depth"] = tree_depth
 
-        for model_type in ["xgb", "rf"]:
+        for model_type in model_types:
             for fold in range(nfolds):
                 model, meta, at = get_model(d, model_type, fold, lr, num_trees,
                                             tree_depth,
-                                            groot_epsilon=INPUT_DELTA[d.name()])
+                                            groot_epsilon=0.5*INPUT_DELTA[d.name()])
                 full_refset0, full_refset1, refset_time = get_refset(d, at, fold)
                 xtrain, ytrain, xtest, ytest = d.train_and_test_set(fold)
                 xtrain, ytrain = xtrain.to_numpy(), ytrain.to_numpy()
@@ -707,19 +723,14 @@ def dataset_prop_table(N, ratio, nfolds, cache_dir, seed):
 
     print("\nDF DATASET PROPERTIES 2")
     df_metrics /= nfolds
-    df_metrics.loc[:, ("xgb", "acc train")] = [f"{x*100:.1f}\\%"
-                                         for x in df_metrics.loc[:, ("xgb", "acc train")]]
-    df_metrics.loc[:, ("rf", "acc train")] = [f"{x*100:.1f}\\%"
-                                        for x in df_metrics.loc[:, ("rf", "acc train")]]
-    df_metrics.loc[:, ("xgb", "acc test")] = [f"{x*100:.1f}\\%"
-                                         for x in df_metrics.loc[:, ("xgb", "acc test")]]
-    df_metrics.loc[:, ("rf", "acc test")] = [f"{x*100:.1f}\\%"
-                                        for x in df_metrics.loc[:, ("rf", "acc test")]]
-    df_metrics.loc[:, ("xgb", "refset")] = [f"{x/1000:.1f}k"
-                                         for x in df_metrics.loc[:, ("xgb", "refset")]]
-    df_metrics.loc[:, ("rf", "refset")] = [f"{x/1000:.1f}k"
-                                        for x in df_metrics.loc[:, ("rf", "refset")]]
-    df_metrics.columns = pd.MultiIndex.from_product([["\\bf XGB", "\\bf RF"],
+    for mt in model_types:
+        df_metrics.loc[:, (mt, "acc train")] = [f"{x*100:.1f}\\%"
+                                             for x in df_metrics.loc[:, (mt, "acc train")]]
+        df_metrics.loc[:, (mt, "acc test")] = [f"{x*100:.1f}\\%"
+                                             for x in df_metrics.loc[:, (mt, "acc test")]]
+        df_metrics.loc[:, (mt, "refset")] = [f"{x/1000:.1f}k"
+                                             for x in df_metrics.loc[:, (mt, "refset")]]
+    df_metrics.columns = pd.MultiIndex.from_product([[f"\\bf {mt.upper()}" for mt in model_types],
                                              ["acc. train", "acc. test", "$|R|$"]],
                                             names=["", ""])
     print(df_metrics)
@@ -737,6 +748,8 @@ def plot_confdelta(per_confdelta, name, model_type):
                             gridspec_kw={'height_ratios':[2, 1]})
     fig.subplots_adjust(left=0.07, bottom=0.17, right=0.98, hspace=0.2,
                         wspace=0.3, top=0.78)
+
+    print("plot_confdelta", dnames)
 
     for ax, axl, dname in zip(axs[0, :], axs[1, :], dnames):
         pcd = per_confdelta[dname]
@@ -958,7 +971,7 @@ def plot_confdist2(per_confdelta, model_type): # 5 different subplots
         kwargs = {"facecolor": cmap(u)}
         label = s
         if s == "test":
-            label = "test set"
+            label = "normal"
             kwargs["facecolor"] = "gray"
         kde = KernelDensity(kernel="gaussian", bandwidth=0.02).fit(conf_s.reshape(-1, 1))
         #y = kde.score_samples(x.reshape(-1, 1))
@@ -1111,6 +1124,7 @@ def plot_vary_refset_size(r, dnames, name, model_type):
                 a = np.vstack([data[fold][k] for fold in range(len(data))])
             y = a.mean(axis=0)
             e = a.std(axis=0)
+            print(dname, k, y)
             axs[j].errorbar(subsets, y, yerr=e,
                     linestyle=lstyles[i],
                     marker=markers[i],
@@ -1191,18 +1205,18 @@ def analyze(model_type, N, ratio, nfolds, cache_dir, seed):
 
     # python analyze_results.py -N 500 --cache_dir=cache_pinacs --ratio 4
 
-#    #dnames = ["phoneme"]
-#    dnames = USED_DATASETS
-#    #dnames = ["electricity", "covtype", "ijcnn1", "mnist2v4"]
-#    #dnames = ["mnist2v4", "fmnist2v4"]
-#
-#    per_set, per_alg, per_set_alg, per_confdelta = collect_results(dnames,
-#                                                                   model_type,
-#                                                                   N, ratio,
-#                                                                   nfolds,
-#                                                                   cache_dir,
-#                                                                   seed)
-#    display_results(per_set, per_alg, per_set_alg, model_type) # all datasets
+    #dnames = ["phoneme"]
+    dnames = USED_DATASETS
+    #dnames = ["electricity", "covtype", "ijcnn1", "mnist2v4"]
+    #dnames = ["mnist2v4", "fmnist2v4"]
+
+    per_set, per_alg, per_set_alg, per_confdelta = collect_results(dnames,
+                                                                   model_type,
+                                                                   N, ratio,
+                                                                   nfolds,
+                                                                   cache_dir,
+                                                                   seed)
+    display_results(per_set, per_alg, per_set_alg, model_type) # all datasets
 #
 #    set1 = ["electricity", "covtype", "ijcnn1", "mnist2v4"]
 #    set2 = [s for s in per_confdelta if s not in set1]
@@ -1229,7 +1243,7 @@ def analyze(model_type, N, ratio, nfolds, cache_dir, seed):
 
     ###########
 
-    dataset_prop_table(N, ratio, nfolds, cache_dir, seed)
+#    dataset_prop_table(N, ratio, nfolds, cache_dir, seed)
     
 
 if __name__ == "__main__":

@@ -3,7 +3,7 @@ import time
 from veritas import KantchelianAttack
 from util import *
 
-def get_closest_adversarial_examples(d, indices, at, N, max_time=10, delta_multiplier=1.5):
+def get_closest_adversarial_examples(d, indices, at, N, start_delta, max_time=10):
     kan_advs = []
     nfail = 0
 
@@ -29,7 +29,7 @@ def get_closest_adversarial_examples(d, indices, at, N, max_time=10, delta_multi
         at0, at1 = (at, None) if label else (None, at) # minimize if y==1, max if y==0
         rob = veritas.VeritasRobustnessSearch(at0, at1,
                 example=example, mem_capacity=16*1024*1024*1024,
-                start_delta=INPUT_DELTA[d.name()], max_time=max_time)
+                start_delta=start_delta, max_time=max_time)
         rob.search()
         if len(rob.generated_examples) > 0:
             adv_example = rob.generated_examples[-1]

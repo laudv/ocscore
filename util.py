@@ -18,8 +18,8 @@ USED_DATASETS = ["calhouse", "electricity", "covtype", "higgs",
 INPUT_DELTA = {
     "Phoneme":   0.05,
     "Spambase":  0.05,
-    "CalhouseClf": 0.04,
-    "Electricity": 0.04,
+    "CalhouseClf": 0.02,
+    "Electricity": 0.02,
     "CovtypeNormalized":   0.08,
     "Higgs":     0.04,
     "Ijcnn1":    0.04,
@@ -88,7 +88,7 @@ def load(fname):
 
 def get_report_name(d, seed, fold, N, ratio, model_type, num_trees, tree_depth, lr, cache_dir, special=""):
     report_name = os.path.join(cache_dir, 
-            f"{special}report_hypo3_"
+            f"{special}report_"
             f"{d.name()}-seed{seed}-fold{fold}_"
             f"N{N}:{ratio}_"
             f"{model_type}{num_trees}-{tree_depth}-{lr*100:.0f}.joblib")
@@ -111,6 +111,7 @@ def get_model(d, model_type, fold, lr, num_trees, tree_depth, groot_epsilon=None
     elif model_type == "groot":
         if groot_epsilon is None:
             raise RuntimeError("pass epsilon for groot")
+        tree_depth = 8 # override
         model, meta = d.get_groot_model(fold, num_trees, tree_depth, groot_epsilon)
     else: raise RuntimeError(f"invalid model type {model_type}")
     at = d.get_addtree(model, meta)
