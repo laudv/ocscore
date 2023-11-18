@@ -625,8 +625,8 @@ def display_results(per_set, per_alg, per_set_alg, model_type):
     print(df_auc_per_alg)
     with open(os.path.join(TABLE_DIR, f"auc_aggr_table_{model_type}.tex"), "w") as f:
         #df_auc_per_alg.columns = [f"{{{x}}}" for x in df_auc_per_alg.columns]
-        df_auc_per_alg.to_latex(buf=f, longtable=False, escape=False,
-                column_format="l"+"l"*df_auc_per_alg.shape[1])
+        df_auc_per_alg.T.to_latex(buf=f, longtable=False, escape=False,
+                column_format="l"+"l"*df_auc_per_alg.shape[0])
 
     print("\nauc_aggr AUC aggregated over all datasets")
     print(df_auc_per_set)
@@ -665,11 +665,11 @@ def display_results(per_set, per_alg, per_set_alg, model_type):
                 column_format="l"+"l"*df_delta.shape[1])
 
 def dataset_prop_table(N, ratio, nfolds, cache_dir, seed):
-    columns_tex = ["$\#F$", "$n$", "$\\eta$", "$M$", "$d_T$"]
-    columns = ["nfeat", "nexamples", "lr", "ntrees", "tree_depth"]
+    columns_tex = ["$\#F$", "$n$", "$\\eta$", "$M$", "$d_T$", "class balance"]
+    columns = ["nfeat", "nexamples", "lr", "ntrees", "tree_depth", "classbal"]
     df_dsets = pd.DataFrame("-", index=USED_DATASETS, columns=columns)
 
-    columns2_tex = ["$\#F$", "$n$", "$\\eta$", "$M$", "$d_T$"]
+    columns2_tex = ["$\#F$", "$n$", "$\\eta$", "$M$", "tree depth", "class balance"]
     model_types = ["xgb", "rf", "groot"]
     columns2 = pd.MultiIndex.from_product([model_types,
                                            ["acc train", "acc test", "refset"]],
@@ -686,32 +686,33 @@ def dataset_prop_table(N, ratio, nfolds, cache_dir, seed):
 
         df_dsets.loc[dname, "nfeat"] = d.X.shape[1]
         df_dsets.loc[dname, "nexamples"] = f"{d.X.shape[0]/1000:.1f}k"
-        df_dsets.loc[dname, "lr"] = lr
+        df_dsets.loc[dname, "lr"] = f"{lr:.1f}"
         df_dsets.loc[dname, "ntrees"] = num_trees
         df_dsets.loc[dname, "tree_depth"] = tree_depth
+        df_dsets.loc[dname, "classbal"] = f"{np.mean(d.y==0)*100:.0f}\\%"
 
-        for model_type in model_types:
-            for fold in range(nfolds):
-                model, meta, at = get_model(d, model_type, fold, lr, num_trees,
-                                            tree_depth,
-                                            groot_epsilon=0.5*INPUT_DELTA[d.name()])
-                full_refset0, full_refset1, refset_time = get_refset(d, at, fold)
-                xtrain, ytrain, xtest, ytest = d.train_and_test_set(fold)
-                xtrain, ytrain = xtrain.to_numpy(), ytrain.to_numpy()
-                xtest, ytest = xtest.to_numpy(), ytest.to_numpy()
+        #for model_type in model_types:
+        #    for fold in range(nfolds):
+        #        model, meta, at = get_model(d, model_type, fold, lr, num_trees,
+        #                                    tree_depth,
+        #                                    groot_epsilon=0.5*INPUT_DELTA[d.name()])
+        #        full_refset0, full_refset1, refset_time = get_refset(d, at, fold)
+        #        xtrain, ytrain, xtest, ytest = d.train_and_test_set(fold)
+        #        xtrain, ytrain = xtrain.to_numpy(), ytrain.to_numpy()
+        #        xtest, ytest = xtest.to_numpy(), ytest.to_numpy()
 
-                acc_train = accuracy_score(ytrain, at.eval(xtrain) > 0.0)
-                acc_test = accuracy_score(ytest, at.eval(xtest) > 0.0)
+        #        acc_train = accuracy_score(ytrain, at.eval(xtrain) > 0.0)
+        #        acc_test = accuracy_score(ytest, at.eval(xtest) > 0.0)
 
-                refset_size = full_refset0.shape[0] + full_refset1.shape[0]
+        #        refset_size = full_refset0.shape[0] + full_refset1.shape[0]
 
-                print(f"REFSET {dname} {model_type} {fold}: {refset_time:.1f}s, "\
-                      f"{full_refset0.shape[0]} + {full_refset1.shape[0]}, "\
-                      f"{acc_train*100:.1f}%, {meta['metric'][1]*100:.1f}%, {acc_test*100:.1f}%")
+        #        print(f"REFSET {dname} {model_type} {fold}: {refset_time:.1f}s, "\
+        #              f"{full_refset0.shape[0]} + {full_refset1.shape[0]}, "\
+        #              f"{acc_train*100:.1f}%, {meta['metric'][1]*100:.1f}%, {acc_test*100:.1f}%")
 
-                df_metrics.loc[dname, (model_type, "refset")] += refset_size
-                df_metrics.loc[dname, (model_type, "acc train")] += acc_train
-                df_metrics.loc[dname, (model_type, "acc test")] += acc_test
+        #        df_metrics.loc[dname, (model_type, "refset")] += refset_size
+        #        df_metrics.loc[dname, (model_type, "acc train")] += acc_train
+        #        df_metrics.loc[dname, (model_type, "acc test")] += acc_test
 
     print("\nDF DATASET PROPERTIES")
     print(df_dsets)
@@ -721,33 +722,33 @@ def dataset_prop_table(N, ratio, nfolds, cache_dir, seed):
         df_dsets.to_latex(buf=f, longtable=False, escape=False,
                 column_format="l"+"r"*df_dsets.shape[1])
 
-    print("\nDF DATASET PROPERTIES 2")
-    df_metrics /= nfolds
-    for mt in model_types:
-        df_metrics.loc[:, (mt, "acc train")] = [f"{x*100:.1f}\\%"
-                                             for x in df_metrics.loc[:, (mt, "acc train")]]
-        df_metrics.loc[:, (mt, "acc test")] = [f"{x*100:.1f}\\%"
-                                             for x in df_metrics.loc[:, (mt, "acc test")]]
-        df_metrics.loc[:, (mt, "refset")] = [f"{x/1000:.1f}k"
-                                             for x in df_metrics.loc[:, (mt, "refset")]]
-    df_metrics.columns = pd.MultiIndex.from_product([[f"\\bf {mt.upper()}" for mt in model_types],
-                                             ["acc. train", "acc. test", "$|R|$"]],
-                                            names=["", ""])
-    print(df_metrics)
-    with open(os.path.join(TABLE_DIR, f"datasets_metrics_table.tex"), "w") as f:
-        #df_auc_per_alg.columns = [f"{{{x}}}" for x in df_auc_per_alg.columns]
-        #df_metrics.columns = columns2_tex
-        df_metrics.to_latex(buf=f, longtable=False, escape=False,
-                column_format="l"+"r"*df_metrics.shape[1])
+    #print("\nDF DATASET PROPERTIES 2")
+    #df_metrics /= nfolds
+    #for mt in model_types:
+    #    df_metrics.loc[:, (mt, "acc train")] = [f"{x*100:.1f}\\%"
+    #                                         for x in df_metrics.loc[:, (mt, "acc train")]]
+    #    df_metrics.loc[:, (mt, "acc test")] = [f"{x*100:.1f}\\%"
+    #                                         for x in df_metrics.loc[:, (mt, "acc test")]]
+    #    df_metrics.loc[:, (mt, "refset")] = [f"{x/1000:.1f}k"
+    #                                         for x in df_metrics.loc[:, (mt, "refset")]]
+    #df_metrics.columns = pd.MultiIndex.from_product([[f"\\bf {mt.upper()}" for mt in model_types],
+    #                                         ["acc. train", "acc. test", "$|R|$"]],
+    #                                        names=["", ""])
+    #print(df_metrics)
+    #with open(os.path.join(TABLE_DIR, f"datasets_metrics_table.tex"), "w") as f:
+    #    #df_auc_per_alg.columns = [f"{{{x}}}" for x in df_auc_per_alg.columns]
+    #    #df_metrics.columns = columns2_tex
+    #    df_metrics.to_latex(buf=f, longtable=False, escape=False,
+    #            column_format="l"+"r"*df_metrics.shape[1])
 
 def plot_confdelta(per_confdelta, name, model_type):
     dnames = per_confdelta.keys()
     fig, axs = plt.subplots(2, len(dnames),
-                            figsize=(6.2, 2.0),
+                            figsize=(6.2 * 3.0/4.0, 1.8),
                             sharex=True,
                             gridspec_kw={'height_ratios':[2, 1]})
-    fig.subplots_adjust(left=0.07, bottom=0.17, right=0.98, hspace=0.2,
-                        wspace=0.3, top=0.78)
+    fig.subplots_adjust(left=0.08, bottom=0.25, right=0.98, hspace=0.2,
+                        wspace=0.35, top=0.78)
 
     print("plot_confdelta", dnames)
 
@@ -801,7 +802,8 @@ def plot_confdelta(per_confdelta, name, model_type):
             lines.append(l)
 
         #axl.set_xlabel("Confidence")
-        axl.set_xlabel("fraction of examples")
+        axl.set_xlabel("fraction of\nexamples")
+        axl.text(0, 0, "fraction of examples")
         #xticks = np.linspace(0, 1, 5)
         #xticklabels = np.quantile(confq, xticks).round(2)
         #ax.set_xticks(xticks)
@@ -813,6 +815,10 @@ def plot_confdelta(per_confdelta, name, model_type):
         axl.set_xticks([0.0, 0.2, 0.4, 0.6, 0.8, 1.0])
         axl.set_xticklabels([".0", ".2", ".4", ".6", ".8", "1"])
         ax.set_xticks(axl.get_xticks())
+        ax.set_yticks([0.0, 0.5, 1.0])
+        ax.set_yticklabels(["0", ".5", "1"])
+        axl.set_yticks([0.5, 1.0])
+        axl.set_yticklabels([".5", "1"])
         #ax.set_xticklabels([""] * len(axl.get_xticks()))
         #ax.grid(visible=True, axis="x", which="major", color="lightgray")
         #axl.grid(visible=True, axis="x", which="major", color="lightgray")
@@ -958,8 +964,8 @@ def plot_confdist2(per_confdelta, model_type): # 5 different subplots
         x = np.linspace(0.5, 1.0, 101)
         bottom = np.zeros(x.shape)
 
-    fig, axs = plt.subplots(1, 5, figsize=(6.2, 0.9), sharey=True)
-    fig.subplots_adjust(left=0.055, bottom=0.36, right=0.99, top=0.9, wspace=0.1)
+    fig, axs = plt.subplots(1, 5, figsize=(6.2 * 3.0/4.0, 0.9), sharey=True)
+    fig.subplots_adjust(left=0.09, bottom=0.36, right=0.99, top=0.85, wspace=0.14)
 
     conf = all_conf
     sets = all_sets
@@ -997,7 +1003,7 @@ def plot_confdist2(per_confdelta, model_type): # 5 different subplots
         ax.legend(loc="upper center")
 
 
-    axs[0].set_ylabel("Gaussian\nkernel density")
+    axs[0].set_ylabel("Gaussian\nkernel\ndensity")
     #for k in [0, 1, 2]: plt.setp(axs[k].get_xticklabels(), visible=False)
 
     if SAVEFIGS:
@@ -1111,8 +1117,8 @@ def plot_vary_refset_size(r, dnames, name, model_type):
     markers = ["o", "x", "D", "v", "^", "s", "h", "H"]
     lstyles = list(ALG_LS.values())
     cmap = cm.get_cmap("tab10")
-    fig, axs = plt.subplots(1, 2, figsize=(3.2, 1.5), num=f"subset")
-    fig.subplots_adjust(left=0.15, bottom=0.22, right=0.96, top=0.82, wspace=0.45, hspace=0.60)
+    fig, axs = plt.subplots(1, 2, figsize=(4.2, 1.1), num=f"subset")
+    fig.subplots_adjust(left=0.1, bottom=0.31, right=0.78, top=0.97, wspace=0.50, hspace=0.60)
 
     for i, dname in enumerate(dnames):
         data = r[dname]
@@ -1138,7 +1144,7 @@ def plot_vary_refset_size(r, dnames, name, model_type):
 
     #axs[0].legend()
     handles, labels = axs.ravel()[0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc="upper center", ncol=4, columnspacing=1.4)
+    fig.legend(handles, labels, loc="center right", ncol=1, columnspacing=1.4)
     axs[0].set_ylim([0.5, 1.01])
     axs[0].set_ylabel("ROC AUC")
     axs[1].set_ylabel("time fraction")
@@ -1170,7 +1176,7 @@ def plot_vary_refset_size(r, dnames, name, model_type):
 @click.command()
 @click.option("-m", "--model_type", type=click.Choice(["xgb", "rf", "groot"]), default="xgb")
 @click.option("-N", "N", default=100)
-@click.option("--ratio", default=5)
+@click.option("--ratio", default=4)
 @click.option("--nfolds", default=NFOLDS)
 @click.option("--cache_dir", default="cache", show_default=True)
 @click.option("--seed", default=SEED)
@@ -1207,8 +1213,7 @@ def analyze(model_type, N, ratio, nfolds, cache_dir, seed):
 
     #dnames = ["phoneme"]
     dnames = USED_DATASETS
-    #dnames = ["electricity", "covtype", "ijcnn1", "mnist2v4"]
-    #dnames = ["mnist2v4", "fmnist2v4"]
+    #dnames = ["electricity", "covtype", "mnist2v4"]
 
     per_set, per_alg, per_set_alg, per_confdelta = collect_results(dnames,
                                                                    model_type,
@@ -1216,34 +1221,33 @@ def analyze(model_type, N, ratio, nfolds, cache_dir, seed):
                                                                    nfolds,
                                                                    cache_dir,
                                                                    seed)
-    display_results(per_set, per_alg, per_set_alg, model_type) # all datasets
-#
-#    set1 = ["electricity", "covtype", "ijcnn1", "mnist2v4"]
-#    set2 = [s for s in per_confdelta if s not in set1]
-#
-#    plot_confdelta({k: v for k, v in per_confdelta.items() if k in set1},
-#                   "set1", model_type)
-#    plot_confdelta({k: v for k, v in per_confdelta.items() if k in set2},
-#                   "set2", model_type)
-#
-#    plot_confdist2(per_confdelta, model_type) # all datasets
+    #display_results(per_set, per_alg, per_set_alg, model_type) # all datasets
+
+    #set1 = ["electricity", "covtype", "ijcnn1", "mnist2v4"]
+    #set2 = [s for s in per_confdelta if s not in set1]
+
+    #for i, s in enumerate([set1, set2]):
+    #    plot_confdelta({k: v for k, v in per_confdelta.items() if k in s},
+    #                   f"set{i+1}", model_type)
+
+    plot_confdist2(per_confdelta, model_type) # all datasets
 
 
     ###########
 
     
-#    # python analyze_results.py -N 500 --cache_dir=cache_pinacs --ratio 4
-#    r = load(os.path.join(cache_dir, f"vary_refszet_size_{model_type}.joblib"))
-#    set1 = ["covtype", "mnist2v4", "ijcnn1"]
-#    set2 = set1 + ["electricity"]
-#    set3 = [s for s in USED_DATASETS if s not in set2]
-#    plot_vary_refset_size(r, set1, "set1", model_type)
-#    plot_vary_refset_size(r, set2, "set2", model_type)
-#    plot_vary_refset_size(r, set3, "set3", model_type)
+    ## python analyze_results.py -N 500 --cache_dir=cache_pinacs --ratio 4
+    #r = load(os.path.join(cache_dir, f"vary_refszet_size_{model_type}.joblib"))
+    #set1 = ["covtype", "mnist2v4", "ijcnn1"]
+    #set2 = set1 + ["electricity"]
+    #set3 = [s for s in USED_DATASETS if s not in set2]
+    #plot_vary_refset_size(r, set1, "set1", model_type)
+    #plot_vary_refset_size(r, set2, "set2", model_type)
+    #plot_vary_refset_size(r, set3, "set3", model_type)
 
     ###########
 
-#    dataset_prop_table(N, ratio, nfolds, cache_dir, seed)
+    #dataset_prop_table(N, ratio, nfolds, cache_dir, seed)
     
 
 if __name__ == "__main__":
