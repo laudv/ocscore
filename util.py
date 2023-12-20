@@ -4,6 +4,7 @@ import joblib
 import numpy as np
 import matplotlib.pyplot as plt
 import ocscore
+import ocscore_veritas
 import veritas
 
 from sklearn.metrics import roc_curve, auc
@@ -134,8 +135,8 @@ def get_refset(d, at, fold):
     xtrain_class0 = xtrain_correct[ytrain_correct == 0]
     xtrain_class1 = xtrain_correct[ytrain_correct == 1]
 
-    refset_class0 = ocscore.mapids(at, xtrain_class0)
-    refset_class1 = ocscore.mapids(at, xtrain_class1)
+    refset_class0 = ocscore_veritas.mapids(at, xtrain_class0)
+    refset_class1 = ocscore_veritas.mapids(at, xtrain_class1)
 
     refset_time = time.time() - tstart
 

@@ -1,7 +1,6 @@
 #cython: language_level=3
 
 import numpy as np
-import veritas
 
 #cimport numpy as np
 cimport cython
@@ -9,7 +8,7 @@ from cython.parallel import prange, parallel
 
 from libc.stdlib cimport abort, malloc, free
 from libc.stdint cimport int8_t,  int32_t,  int64_t
-from libc.stdint cimport uint8_t, uint32_t, uint64_t
+from libc.stdint cimport uint8_t, uint16_t, uint32_t, uint64_t
 
 cdef extern from "immintrin.h":
     ctypedef struct __m256i:
@@ -28,44 +27,38 @@ cdef extern from "immintrin.h":
 
 #------------------------------------------------------------------------------
 
-# leaf2id[tree_id, node_id] = leaf ID
-def get_leaf2id(at_or_tree):
-    if isinstance(at_or_tree, veritas.AddTree):
-        at = at_or_tree
-        per_tree = [get_leaf2id(at[i]) for i in range(len(at))]
-        max_width = max(map(len, per_tree))
-        leaf2id = np.zeros((len(per_tree), max_width), dtype=np.uint8) - 1 
-        for i, l2id in enumerate(per_tree):
-            leaf2id[i, 0:len(l2id)] = l2id
-        return leaf2id
-    else: # veritas.Tree
-        tree = at_or_tree
-        leaf2id = {leaf_id: i for i, leaf_id in enumerate(tree.get_leaf_ids())}
-        if len(leaf2id) > 254:
-            raise RuntimeError("too many leafs for u8")
-        leaf2id_arr = np.zeros(max(leaf2id.keys())+1, dtype=np.uint8) - 1
-        for k, v in leaf2id.items():
-            leaf2id_arr[k] = v
-        return leaf2id_arr
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
-cdef void mapids_(int32_t[:,:] leafs, uint8_t[:,:] leaf2id, uint8_t[:,:] out) nogil:
+cdef void mapids_uint8_(int32_t[:,:] leafs, uint8_t[:,:] leaf2id, uint8_t[:,:] out) nogil:
     for j in xrange(leafs.shape[1]):
         for i in xrange(leafs.shape[0]):
             out[i, j] = leaf2id[j, leafs[i, j]]
 
-def mapids(at, X):
-    ids = np.zeros((X.shape[0], len(at)), order="F", dtype=np.uint8)
-    leafs = np.column_stack([at[i].eval_node(X) for i in range(len(at))])
-    mapids_(leafs, get_leaf2id(at), ids)
+@cython.boundscheck(False)
+@cython.wraparound(False)
+cdef void mapids_uint16_(int32_t[:,:] leafs, uint16_t[:,:] leaf2id, uint16_t[:,:] out) nogil:
+    for j in xrange(leafs.shape[1]):
+        for i in xrange(leafs.shape[0]):
+            out[i, j] = leaf2id[j, leafs[i, j]]
+
+# leaf2id[tree_id, node_id] = leaf ID
+def mapids(leafs, leaf2id, dtype):
+    ids = np.zeros(leafs.shape, order="F", dtype=dtype)
+    if dtype == np.uint8:
+        mapids_uint8_(leafs, leaf2id, ids)
+    elif dtype == np.uint16:
+        mapids_uint16_(leafs, leaf2id, ids)
+    else:
+        raise ValueError("invalid dtype")
     return ids
 
-#------------------------------------------------------------------------------
+
+#- UINT8 ----------------------------------------------------------------------
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
-cdef uint32_t _ocscore_colmaj(uint8_t[:, :] refset, uint8_t[:] test) nogil:
+cdef uint32_t _ocscore_colmaj8(uint8_t[:, :] refset, uint8_t[:] test) nogil:
     cdef int i
     cdef int j
     cdef __m256i vcnt = _mm256_set1_epi8(-1) # 255
@@ -127,10 +120,10 @@ cdef uint32_t _ocscore_colmaj(uint8_t[:, :] refset, uint8_t[:] test) nogil:
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
-cdef void _ocscores_colmaj(uint8_t[:, :] refset, uint8_t[:, :] test, uint32_t[:] out) nogil:
+cdef void _ocscores_colmaj8(uint8_t[:, :] refset, uint8_t[:, :] test, uint32_t[:] out) nogil:
     cdef int i
     for i in prange(test.shape[0], nogil=True):
-        out[i] = _ocscore_colmaj(refset, test[i,:])
+        out[i] = _ocscore_colmaj8(refset, test[i,:])
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
@@ -193,11 +186,41 @@ cdef void _ocscores_colmaj_topk(uint8_t[:, :] refset, uint8_t[:, :] test,
 
         free(local_buf)
 
+#- UINT16 --------------------------------------------------------------------
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+cdef uint32_t _ocscore_colmaj16(uint16_t[:, :] refset, uint16_t[:] test) nogil:
+    cdef int i
+    cdef int j
+    cdef uint32_t min_cnt = ~0
+
+    cdef uint16_t tmp
+    for i in xrange(refset.shape[0]):
+        tmp = 0
+        for j in xrange(refset.shape[1]):
+            tmp += (refset[i, j] ^ test[j]) > 0
+        min_cnt = min(min_cnt, tmp)
+
+    return min_cnt
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+cdef void _ocscores_colmaj16(uint16_t[:, :] refset, uint16_t[:, :] test, uint32_t[:] out) nogil:
+    cdef int i
+    for i in prange(test.shape[0], nogil=True):
+        out[i] = _ocscore_colmaj16(refset, test[i,:])
+
+
+
+
 #- ENTRY POINTS ---------------------------------------------------------------
 
 def _validate_input(refset, test):
-    if refset.dtype != np.uint8 or test.dtype != np.uint8:
-        raise ValueError("must be byte matrixes") 
+    if not (
+            (refset.dtype == np.uint8  and test.dtype == np.uint8)
+        or  (refset.dtype == np.uint16 and test.dtype == np.uint16)):
+        raise ValueError("must be byte or short matrices") 
     if refset.shape[1] != test.shape[1]:
         raise ValueError("shapes do not match")
     if refset.shape[1] >= 255:
@@ -205,11 +228,11 @@ def _validate_input(refset, test):
 
 def _prep_input(refset, test, order, dtype):
     sh = refset.shape
-    sz = dtype().itemsize
+    sz = dtype.itemsize
     if sh[1] % sz != 0:
-        z = np.zeros((sh[0], (sh[1]//sz+1)*sz-sh[1]), dtype=np.uint8)
+        z = np.zeros((sh[0], (sh[1]//sz+1)*sz-sh[1]), dtype)
         refset = np.concatenate((refset, z), axis=1)
-        z = np.zeros((test.shape[0], (sh[1]//sz+1)*sz-sh[1]), dtype=np.uint8)
+        z = np.zeros((test.shape[0], (sh[1]//sz+1)*sz-sh[1]), dtype)
         test = np.concatenate((test, z), axis=1)
     refset = np.array(refset.view(dtype), order=order)
     test = np.array(test.view(dtype), order=order)
@@ -217,19 +240,31 @@ def _prep_input(refset, test, order, dtype):
 
 def ocscores(refset, test):
     _validate_input(refset, test)
-    refset, test = _prep_input(refset, test, order="F", dtype=np.uint8)
+    dtype = refset.dtype
+    refset, test = _prep_input(refset, test, order="F", dtype=dtype)
 
     out = np.zeros(test.shape[0], dtype=np.uint32)
 
-    _ocscores_colmaj(refset, test, out)
+    if dtype == np.uint8:
+        _ocscores_colmaj8(refset, test, out)
+    elif dtype == np.uint16:
+        _ocscores_colmaj16(refset, test, out)
+    else:
+        raise ValueError("invalid dtype of refset")
+
     return out
 
 def ocscores_topk(refset, test, k):
     _validate_input(refset, test)
-    refset, test = _prep_input(refset, test, order="F", dtype=np.uint8)
+    dtype = refset.dtype
+    refset, test = _prep_input(refset, test, order="F", dtype=dtype)
 
     indexes = np.zeros((test.shape[0], k), dtype=np.uint32)
     scores = np.zeros((test.shape[0], k), dtype=np.uint8)
 
-    _ocscores_colmaj_topk(refset, test, indexes, scores)
+    if dtype == np.uint8:
+        _ocscores_colmaj_topk(refset, test, indexes, scores)
+    else:
+        raise ValueError("invalid dtype of refset (no uint16 implementation yet)")
+
     return indexes, scores

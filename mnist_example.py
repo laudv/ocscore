@@ -45,6 +45,7 @@ print(f"Train acc: {acc_train:.3f}, test acc: {acc_test:.3f} wrt true labels")
 
 
 
+
 # Find a reference set, e.g. set of correctly classified training examples
 xref_mask = ytrain_pred == ytrain
 xref = xtrain[xref_mask]
@@ -69,19 +70,32 @@ xquery[1, :] = X_mc[np.argmax(y_mc==8), :]
 
 # To compute the OC-score, we need the OCs of the refset and the test set
 # examples (i.e., an identifier for each reached leaf). We use the scikit-learn
-# apply function for this here. In the experiments, we used ocscore.mapsids to
+# apply function for this here. In the experiments, we used ocscore.mapids to
 # ensure that the identifiers are in 0..255.
 # We are used max-depth 4 here, so the leaf id is always < 255.
-idref0 = model.apply(xref0).astype(np.uint8)
-idref1 = model.apply(xref1).astype(np.uint8)
-idquery = model.apply(xquery).astype(np.uint8)
+dtype = np.uint16
+idref0 = model.apply(xref0).astype(dtype)
+idref1 = model.apply(xref1).astype(dtype)
+idquery = model.apply(xquery).astype(dtype)
+
+
+### WITH VERITAS ##
+#import veritas
+#import ocscore_veritas
+#at = veritas.get_addtree(model)
+#idref0 = ocscore_veritas.mapids(at, xref0, dtype)
+#idref1 = ocscore_veritas.mapids(at, xref1, dtype)
+#idquery = ocscore_veritas.mapids(at, xquery, dtype)
+
 
 # Compute OC-score with respect to refset examples with the same (predicted) label
+t = time.time()
 S0 = ocscore.ocscores(idref0, idquery[yquery_pred==0])
 S1 = ocscore.ocscores(idref1, idquery[yquery_pred==1])
 S = np.zeros(idquery.shape[0], dtype=int)
 S[yquery_pred==0] = S0
 S[yquery_pred==1] = S1
+print(f"OC-scores in {1000.0*(time.time() - t):.1f} ms")
 
 print(S0)
 print(S1)
