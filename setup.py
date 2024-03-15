@@ -10,7 +10,8 @@ setup(
     ext_modules=[
         Extension("ocscore",
             sources=["ocscore.pyx"],
-            extra_compile_args=["-O3", "-mavx", "-mavx2"]
+            extra_compile_args=["-O3", "-mavx", "-mavx2", "-fopenmp"],
+            extra_link_args=["-fopenmp"]
         )
     ],
     zip_safe=False,
